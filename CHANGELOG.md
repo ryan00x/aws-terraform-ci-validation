@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/hectorvent/floci/compare/1.0.1...1.0.2) (2026-03-15)
+
+
+### Bug Fixes
+
+* docker built action not being triggered ([a6b078f](https://github.com/hectorvent/floci/commit/a6b078fd76f973305ccab2e1ce6b45795e76b9b3))
+
 ## [1.0.1](https://github.com/hectorvent/floci/compare/1.0.0...1.0.1) (2026-03-15)
 
 
