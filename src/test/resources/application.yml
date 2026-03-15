@@ -1,0 +1,98 @@
+quarkus:
+  http:
+    port: 0
+    test-port: 0
+
+floci:
+  base-url: "http://localhost:4566"
+  default-region: us-east-1
+  default-account-id: "000000000000"
+  storage:
+    mode: memory
+    persistent-path: ./target/test-data
+    wal:
+      compaction-interval-ms: 60000
+    services:
+      ssm:
+        mode: memory
+        flush-interval-ms: 60000
+      sqs:
+        mode: memory
+      s3:
+        mode: memory
+      dynamodb:
+        mode: memory
+        flush-interval-ms: 60000
+      sns:
+        mode: memory
+        flush-interval-ms: 60000
+      lambda:
+        mode: memory
+        flush-interval-ms: 60000
+      cloudwatchlogs:
+        mode: memory
+        flush-interval-ms: 60000
+      cloudwatchmetrics:
+        mode: memory
+        flush-interval-ms: 60000
+      secretsmanager:
+        mode: memory
+        flush-interval-ms: 60000
+
+  auth:
+    validate-signatures: false
+    presign-secret: test-secret
+
+  services:
+    ssm:
+      enabled: true
+      max-parameter-history: 5
+    sqs:
+      enabled: true
+      default-visibility-timeout: 30
+      max-message-size: 262144
+    s3:
+      enabled: true
+      default-presign-expiry-seconds: 3600
+    dynamodb:
+      enabled: true
+    sns:
+      enabled: true
+    lambda:
+      enabled: true
+    apigateway:
+      enabled: true
+    iam:
+      enabled: true
+    elasticache:
+      enabled: true
+      proxy-base-port: 6379
+      proxy-max-port: 6399
+      default-image: "valkey/valkey:8"
+    rds:
+      enabled: true
+      proxy-base-port: 7000
+      proxy-max-port: 7099
+      default-postgres-image: "postgres:16-alpine"
+      default-mysql-image: "mysql:8.0"
+      default-mariadb-image: "mariadb:11"
+    eventbridge:
+      enabled: true
+    cloudwatchlogs:
+      enabled: true
+      max-events-per-query: 10000
+    cloudwatchmetrics:
+      enabled: true
+    secretsmanager:
+      enabled: true
+      default-recovery-window-days: 30
+    kinesis:
+      enabled: true
+    kms:
+      enabled: true
+    cognito:
+      enabled: true
+    stepfunctions:
+      enabled: true
+    cloudformation:
+      enabled: true

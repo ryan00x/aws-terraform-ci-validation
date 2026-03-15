@@ -1,0 +1,30 @@
+# Stage 1: Build native executable
+FROM quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-24 AS build
+USER root
+WORKDIR /app
+
+# Install Maven 3.9.x (system Maven is too old for Quarkus 3.31)
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.12/binaries/apache-maven-3.9.12-bin.tar.gz | tar xz -C /opt \
+    && ln -sf /opt/apache-maven-3.9.12/bin/mvn /usr/local/bin/mvn
+
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+COPY src ./src
+
+RUN mvn clean package -Dnative -DskipTests -B
+
+# Stage 2: Minimal runtime
+FROM quay.io/quarkus/quarkus-micro-image:2.0
+
+WORKDIR /app
+VOLUME /app/data
+
+EXPOSE 4566
+
+ARG VERSION=latest
+ENV FLOCI_VERSION=${VERSION}
+
+COPY --from=build /app/target/*-runner /app/application
+RUN chmod +x /app/application
+
+ENTRYPOINT ["/app/application"]

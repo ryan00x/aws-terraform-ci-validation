@@ -1,0 +1,294 @@
+package io.github.hectorvent.floci.services.sns;
+
+import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
+
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.*;
+
+/**
+ * Integration tests for SNS via the query (form-encoded) protocol.
+ */
+@QuarkusTest
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class SnsIntegrationTest {
+
+    private static String topicArn;
+    private static String subscriptionArn;
+    private static String sqsQueueUrl;
+
+    @Test
+    @Order(1)
+    void createQueue_forFanout() {
+        sqsQueueUrl = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateQueue")
+            .formParam("QueueName", "sns-fanout-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<QueueUrl>"))
+            .extract().xmlPath().getString("CreateQueueResponse.CreateQueueResult.QueueUrl");
+    }
+
+    @Test
+    @Order(2)
+    void createTopic() {
+        topicArn = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateTopic")
+            .formParam("Name", "integration-test-topic")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<TopicArn>"))
+            .body(containsString("integration-test-topic"))
+            .extract().xmlPath().getString("CreateTopicResponse.CreateTopicResult.TopicArn");
+    }
+
+    @Test
+    @Order(3)
+    void createTopic_idempotent() {
+        String arn = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateTopic")
+            .formParam("Name", "integration-test-topic")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().xmlPath().getString("CreateTopicResponse.CreateTopicResult.TopicArn");
+        assert arn.equals(topicArn);
+    }
+
+    @Test
+    @Order(4)
+    void listTopics() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListTopics")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("integration-test-topic"));
+    }
+
+    @Test
+    @Order(5)
+    void getTopicAttributes() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetTopicAttributes")
+            .formParam("TopicArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("TopicArn"))
+            .body(containsString("SubscriptionsConfirmed"));
+    }
+
+    @Test
+    @Order(6)
+    void subscribe_toSqsQueue() {
+        subscriptionArn = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "Subscribe")
+            .formParam("TopicArn", topicArn)
+            .formParam("Protocol", "sqs")
+            .formParam("Endpoint", sqsQueueUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<SubscriptionArn>"))
+            .extract().xmlPath()
+                .getString("SubscribeResponse.SubscribeResult.SubscriptionArn");
+    }
+
+    @Test
+    @Order(7)
+    void listSubscriptionsByTopic() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListSubscriptionsByTopic")
+            .formParam("TopicArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("sqs"))
+            .body(containsString("sns-fanout-queue"));
+    }
+
+    @Test
+    @Order(8)
+    void listSubscriptions() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListSubscriptions")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("integration-test-topic"));
+    }
+
+    @Test
+    @Order(9)
+    void publish_fanOutToSqsSubscriber() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "Publish")
+            .formParam("TopicArn", topicArn)
+            .formParam("Message", "Hello from SNS!")
+            .formParam("Subject", "Test message")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<MessageId>"));
+
+        // Verify the message arrived in the SQS queue
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ReceiveMessage")
+            .formParam("QueueUrl", sqsQueueUrl)
+            .formParam("MaxNumberOfMessages", "1")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("Hello from SNS!"))
+            .body(containsString("Notification"));
+    }
+
+    @Test
+    @Order(10)
+    void publishBatch() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "PublishBatch")
+            .formParam("TopicArn", topicArn)
+            .formParam("PublishBatchRequestEntries.member.1.Id", "msg1")
+            .formParam("PublishBatchRequestEntries.member.1.Message", "Batch message 1")
+            .formParam("PublishBatchRequestEntries.member.2.Id", "msg2")
+            .formParam("PublishBatchRequestEntries.member.2.Message", "Batch message 2")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<Id>msg1</Id>"))
+            .body(containsString("<Id>msg2</Id>"))
+            .body(containsString("<MessageId>"));
+    }
+
+    @Test
+    @Order(11)
+    void tagResource() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "TagResource")
+            .formParam("ResourceArn", topicArn)
+            .formParam("Tags.member.1.Key", "env")
+            .formParam("Tags.member.1.Value", "test")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(11)
+    void listTagsForResource() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListTagsForResource")
+            .formParam("ResourceArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("env"))
+            .body(containsString("test"));
+    }
+
+    @Test
+    @Order(12)
+    void setTopicAttributes() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "SetTopicAttributes")
+            .formParam("TopicArn", topicArn)
+            .formParam("AttributeName", "DisplayName")
+            .formParam("AttributeValue", "My Test Topic")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(13)
+    void unsubscribe() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "Unsubscribe")
+            .formParam("SubscriptionArn", subscriptionArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListSubscriptionsByTopic")
+            .formParam("TopicArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(not(containsString("sns-fanout-queue")));
+    }
+
+    @Test
+    @Order(14)
+    void deleteTopic() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DeleteTopic")
+            .formParam("TopicArn", topicArn)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ListTopics")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(not(containsString("integration-test-topic")));
+    }
+
+    @Test
+    @Order(15)
+    void unsupportedAction_returns400() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "UnknownSnsAction")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("UnsupportedOperation"));
+    }
+}

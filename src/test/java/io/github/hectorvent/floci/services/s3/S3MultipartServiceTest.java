@@ -1,0 +1,135 @@
+package io.github.hectorvent.floci.services.s3;
+
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
+import io.github.hectorvent.floci.services.s3.model.S3Object;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class S3MultipartServiceTest {
+
+    private S3Service s3Service;
+
+    @TempDir
+    Path tempDir;
+
+    @BeforeEach
+    void setUp() {
+        s3Service = new S3Service(new InMemoryStorage<>(), new InMemoryStorage<>(), tempDir);
+        s3Service.createBucket("test-bucket");
+    }
+
+    @Test
+    void initiateMultipartUpload() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "large-file.bin", "application/octet-stream");
+        assertNotNull(upload.getUploadId());
+        assertEquals("test-bucket", upload.getBucket());
+        assertEquals("large-file.bin", upload.getKey());
+        assertNotNull(upload.getInitiated());
+    }
+
+    @Test
+    void initiateMultipartUploadNonExistentBucket() {
+        assertThrows(AwsException.class, () ->
+                s3Service.initiateMultipartUpload("no-bucket", "key", null));
+    }
+
+    @Test
+    void uploadPart() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
+        byte[] data = "part-1-data".getBytes(StandardCharsets.UTF_8);
+        String eTag = s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, data);
+        assertNotNull(eTag);
+        assertTrue(eTag.startsWith("\""));
+        assertEquals(1, upload.getParts().size());
+    }
+
+    @Test
+    void uploadPartInvalidNumber() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
+        assertThrows(AwsException.class, () ->
+                s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 0, new byte[1]));
+        assertThrows(AwsException.class, () ->
+                s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 10001, new byte[1]));
+    }
+
+    @Test
+    void uploadPartNonExistentUpload() {
+        assertThrows(AwsException.class, () ->
+                s3Service.uploadPart("test-bucket", "file.bin", "bad-id", 1, new byte[1]));
+    }
+
+    @Test
+    void completeMultipartUpload() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", "text/plain");
+        s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "part1".getBytes());
+        s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 2, "part2".getBytes());
+
+        S3Object result = s3Service.completeMultipartUpload("test-bucket", "file.bin",
+                upload.getUploadId(), List.of(1, 2));
+
+        assertNotNull(result);
+        assertEquals("text/plain", result.getContentType());
+        // Verify the data is concatenated
+        S3Object fetched = s3Service.getObject("test-bucket", "file.bin");
+        assertEquals("part1part2", new String(fetched.getData()));
+        // Composite ETag should end with -2 (number of parts)
+        assertTrue(result.getETag().endsWith("-2\""), "ETag should be composite: " + result.getETag());
+    }
+
+    @Test
+    void completeMultipartUploadMissingPart() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
+        s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "part1".getBytes());
+
+        assertThrows(AwsException.class, () ->
+                s3Service.completeMultipartUpload("test-bucket", "file.bin",
+                        upload.getUploadId(), List.of(1, 2)));
+    }
+
+    @Test
+    void abortMultipartUpload() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
+        s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "data".getBytes());
+
+        s3Service.abortMultipartUpload("test-bucket", "file.bin", upload.getUploadId());
+
+        // Upload should no longer exist
+        assertThrows(AwsException.class, () ->
+                s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 2, "data".getBytes()));
+    }
+
+    @Test
+    void listMultipartUploads() {
+        s3Service.initiateMultipartUpload("test-bucket", "file1.bin", null);
+        s3Service.initiateMultipartUpload("test-bucket", "file2.bin", null);
+
+        List<MultipartUpload> uploads = s3Service.listMultipartUploads("test-bucket");
+        assertEquals(2, uploads.size());
+    }
+
+    @Test
+    void listMultipartUploadsEmpty() {
+        List<MultipartUpload> uploads = s3Service.listMultipartUploads("test-bucket");
+        assertTrue(uploads.isEmpty());
+    }
+
+    @Test
+    void completeMultipartUploadCleansUp() {
+        MultipartUpload upload = s3Service.initiateMultipartUpload("test-bucket", "file.bin", null);
+        s3Service.uploadPart("test-bucket", "file.bin", upload.getUploadId(), 1, "data".getBytes());
+        s3Service.completeMultipartUpload("test-bucket", "file.bin", upload.getUploadId(), List.of(1));
+
+        // Should no longer be in active uploads
+        List<MultipartUpload> uploads = s3Service.listMultipartUploads("test-bucket");
+        assertTrue(uploads.isEmpty());
+    }
+}

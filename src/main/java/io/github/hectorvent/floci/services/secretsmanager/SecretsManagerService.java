@@ -1,0 +1,314 @@
+package io.github.hectorvent.floci.services.secretsmanager;
+
+import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.StorageBackend;
+import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.secretsmanager.model.Secret;
+import io.github.hectorvent.floci.services.secretsmanager.model.SecretVersion;
+import com.fasterxml.jackson.core.type.TypeReference;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
+@ApplicationScoped
+public class SecretsManagerService {
+
+    private static final Logger LOG = Logger.getLogger(SecretsManagerService.class);
+
+    private static final String AWSCURRENT = "AWSCURRENT";
+    private static final String AWSPREVIOUS = "AWSPREVIOUS";
+    private static final String ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    private final StorageBackend<String, Secret> store;
+    private final int defaultRecoveryWindowDays;
+    private final RegionResolver regionResolver;
+
+    @Inject
+    public SecretsManagerService(StorageFactory factory, EmulatorConfig config, RegionResolver regionResolver) {
+        this(factory.create("secretsmanager", "secretsmanager-secrets.json",
+                        new TypeReference<Map<String, Secret>>() {}),
+                config.services().secretsmanager().defaultRecoveryWindowDays(),
+                regionResolver);
+    }
+
+    SecretsManagerService(StorageBackend<String, Secret> store, int defaultRecoveryWindowDays) {
+        this(store, defaultRecoveryWindowDays, new RegionResolver("us-east-1", "000000000000"));
+    }
+
+    SecretsManagerService(StorageBackend<String, Secret> store, int defaultRecoveryWindowDays,
+                          RegionResolver regionResolver) {
+        this.store = store;
+        this.defaultRecoveryWindowDays = defaultRecoveryWindowDays;
+        this.regionResolver = regionResolver;
+    }
+
+    public Secret createSecret(String name, String secretString, String secretBinary,
+                               String description, String kmsKeyId, List<Secret.Tag> tags, String region) {
+        String storageKey = regionKey(region, name);
+        Secret existing = store.get(storageKey).orElse(null);
+
+        if (existing != null && existing.getDeletedDate() == null) {
+            throw new AwsException("ResourceExistsException",
+                    "A secret with the name " + name + " already exists.", 400);
+        }
+
+        String arn = buildSecretArn(region, name);
+        Instant now = Instant.now();
+
+        String versionId = UUID.randomUUID().toString();
+        SecretVersion version = new SecretVersion();
+        version.setVersionId(versionId);
+        version.setSecretString(secretString);
+        version.setSecretBinary(secretBinary);
+        version.setVersionStages(List.of(AWSCURRENT));
+        version.setCreatedDate(now);
+
+        Map<String, SecretVersion> versions = new HashMap<>();
+        versions.put(versionId, version);
+
+        Secret secret = new Secret();
+        secret.setName(name);
+        secret.setArn(arn);
+        secret.setDescription(description);
+        secret.setKmsKeyId(kmsKeyId);
+        secret.setRotationEnabled(false);
+        secret.setCreatedDate(now);
+        secret.setLastChangedDate(now);
+        secret.setTags(tags != null ? new ArrayList<>(tags) : new ArrayList<>());
+        secret.setVersions(versions);
+        secret.setCurrentVersionId(versionId);
+
+        store.put(storageKey, secret);
+        LOG.infov("Created secret: {0} in region {1}", name, region);
+        return secret;
+    }
+
+    public SecretVersion getSecretValue(String secretId, String versionId, String versionStage, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        if (secret.getDeletedDate() != null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
+        }
+
+        SecretVersion version;
+        if (versionId != null && !versionId.isEmpty()) {
+            version = secret.getVersions().get(versionId);
+            if (version == null) {
+                throw new AwsException("ResourceNotFoundException",
+                        "Secrets Manager can't find the specified secret version.", 400);
+            }
+        } else {
+            String stage = (versionStage != null && !versionStage.isEmpty()) ? versionStage : AWSCURRENT;
+            version = findVersionByStage(secret, stage);
+            if (version == null) {
+                throw new AwsException("ResourceNotFoundException",
+                        "Secrets Manager can't find the specified secret value for staging label: " + stage, 400);
+            }
+        }
+
+        version.setLastAccessedDate(Instant.now());
+        secret.setLastAccessedDate(Instant.now());
+        store.put(regionKey(region, secret.getName()), secret);
+
+        return version;
+    }
+
+    public SecretVersion putSecretValue(String secretId, String secretString, String secretBinary, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        if (secret.getDeletedDate() != null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
+        }
+
+        Instant now = Instant.now();
+        String newVersionId = UUID.randomUUID().toString();
+
+        SecretVersion oldCurrent = findVersionByStage(secret, AWSCURRENT);
+        if (oldCurrent != null) {
+            List<String> stages = new ArrayList<>(oldCurrent.getVersionStages());
+            stages.remove(AWSCURRENT);
+            if (!stages.contains(AWSPREVIOUS)) {
+                stages.add(AWSPREVIOUS);
+            }
+            oldCurrent.setVersionStages(stages);
+        }
+
+        SecretVersion newVersion = new SecretVersion();
+        newVersion.setVersionId(newVersionId);
+        newVersion.setSecretString(secretString);
+        newVersion.setSecretBinary(secretBinary);
+        newVersion.setVersionStages(new ArrayList<>(List.of(AWSCURRENT)));
+        newVersion.setCreatedDate(now);
+
+        secret.getVersions().put(newVersionId, newVersion);
+        secret.setCurrentVersionId(newVersionId);
+        secret.setLastChangedDate(now);
+
+        store.put(regionKey(region, secret.getName()), secret);
+        LOG.infov("Put secret value for: {0}", secret.getName());
+        return newVersion;
+    }
+
+    public Secret updateSecret(String secretId, String description, String kmsKeyId, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        if (secret.getDeletedDate() != null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
+        }
+
+        if (description != null) {
+            secret.setDescription(description);
+        }
+        if (kmsKeyId != null) {
+            secret.setKmsKeyId(kmsKeyId);
+        }
+        secret.setLastChangedDate(Instant.now());
+
+        store.put(regionKey(region, secret.getName()), secret);
+        LOG.infov("Updated secret metadata: {0}", secret.getName());
+        return secret;
+    }
+
+    public Secret describeSecret(String secretId, String region) {
+        Secret secret = resolveSecret(secretId, region);
+        return secret;
+    }
+
+    public List<Secret> listSecrets(String region) {
+        String prefix = region + "::";
+        return store.scan(key -> key.startsWith(prefix) && store.get(key)
+                .map(s -> s.getDeletedDate() == null)
+                .orElse(false));
+    }
+
+    public Secret deleteSecret(String secretId, Integer recoveryWindowInDays, boolean forceDelete, String region) {
+        Secret secret = resolveSecret(secretId, region);
+        String storageKey = regionKey(region, secret.getName());
+
+        if (forceDelete || (recoveryWindowInDays != null && recoveryWindowInDays == 0)) {
+            store.delete(storageKey);
+            LOG.infov("Force-deleted secret: {0}", secret.getName());
+            secret.setDeletedDate(Instant.now());
+            return secret;
+        }
+
+        int windowDays = (recoveryWindowInDays != null) ? recoveryWindowInDays : defaultRecoveryWindowDays;
+        Instant deletedDate = Instant.now().plusSeconds((long) windowDays * 86400);
+        secret.setDeletedDate(deletedDate);
+        store.put(storageKey, secret);
+        LOG.infov("Scheduled deletion of secret: {0} at {1}", secret.getName(), deletedDate);
+        return secret;
+    }
+
+    public Secret rotateSecret(String secretId, String rotationLambdaArn, Map<String, Integer> rotationRules,
+                               boolean rotateImmediately, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        if (secret.getDeletedDate() != null) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Secrets Manager can't find the specified secret.", 400);
+        }
+
+        secret.setRotationEnabled(true);
+        secret.setLastChangedDate(Instant.now());
+
+        store.put(regionKey(region, secret.getName()), secret);
+        LOG.infov("Stub: Rotated secret: {0} (rotation enabled)", secret.getName());
+        return secret;
+    }
+
+    public void tagResource(String secretId, List<Secret.Tag> tags, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        List<Secret.Tag> existing = secret.getTags() != null ? new ArrayList<>(secret.getTags()) : new ArrayList<>();
+        for (Secret.Tag newTag : tags) {
+            existing.removeIf(t -> t.key().equals(newTag.key()));
+            existing.add(newTag);
+        }
+        secret.setTags(existing);
+        store.put(regionKey(region, secret.getName()), secret);
+    }
+
+    public void untagResource(String secretId, List<String> tagKeys, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        List<Secret.Tag> existing = secret.getTags() != null ? new ArrayList<>(secret.getTags()) : new ArrayList<>();
+        existing.removeIf(t -> tagKeys.contains(t.key()));
+        secret.setTags(existing);
+        store.put(regionKey(region, secret.getName()), secret);
+    }
+
+    public Map<String, List<String>> listSecretVersionIds(String secretId, String region) {
+        Secret secret = resolveSecret(secretId, region);
+
+        Map<String, List<String>> result = new HashMap<>();
+        if (secret.getVersions() != null) {
+            for (Map.Entry<String, SecretVersion> entry : secret.getVersions().entrySet()) {
+                result.put(entry.getKey(), entry.getValue().getVersionStages());
+            }
+        }
+        return result;
+    }
+
+    private Secret resolveSecret(String secretId, String region) {
+        if (secretId.startsWith("arn:")) {
+            List<Secret> found = store.scan(key -> {
+                Secret s = store.get(key).orElse(null);
+                return s != null && secretId.equals(s.getArn());
+            });
+            if (found.isEmpty()) {
+                throw new AwsException("ResourceNotFoundException",
+                        "Secrets Manager can't find the specified secret.", 400);
+            }
+            return found.getFirst();
+        }
+
+        String storageKey = regionKey(region, secretId);
+        return store.get(storageKey)
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                        "Secrets Manager can't find the specified secret.", 400));
+    }
+
+    private SecretVersion findVersionByStage(Secret secret, String stage) {
+        if (secret.getVersions() == null) {
+            return null;
+        }
+        for (SecretVersion v : secret.getVersions().values()) {
+            if (v.getVersionStages() != null && v.getVersionStages().contains(stage)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    private String buildSecretArn(String region, String name) {
+        String suffix = randomSuffix();
+        return regionResolver.buildArn("secretsmanager", region, "secret:" + name + "-" + suffix);
+    }
+
+    private static String regionKey(String region, String name) {
+        return region + "::" + name;
+    }
+
+    private static String randomSuffix() {
+        ThreadLocalRandom rng = ThreadLocalRandom.current();
+        StringBuilder sb = new StringBuilder(6);
+        for (int i = 0; i < 6; i++) {
+            sb.append(ALPHABET.charAt(rng.nextInt(ALPHABET.length())));
+        }
+        return sb.toString();
+    }
+}

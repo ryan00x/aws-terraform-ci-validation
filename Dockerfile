@@ -1,0 +1,27 @@
+# Stage 1: Build
+FROM eclipse-temurin:25-jdk AS build
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
+
+COPY pom.xml .
+RUN mvn dependency:go-offline -q
+
+COPY src/ src/
+RUN mvn clean package -DskipTests -q
+
+# Stage 2: Runtime
+FROM eclipse-temurin:25-jre-alpine
+WORKDIR /app
+
+COPY --from=build /build/target/quarkus-app/ quarkus-app/
+
+RUN mkdir -p /app/data
+VOLUME /app/data
+
+EXPOSE 4566 6379-6399
+
+ARG VERSION=latest
+ENV FLOCI_VERSION=${VERSION}
+
+ENTRYPOINT ["java", "-jar", "quarkus-app/quarkus-run.jar"]

@@ -1,0 +1,345 @@
+package io.github.hectorvent.floci.services.cognito;
+
+import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
+import io.github.hectorvent.floci.services.cognito.model.UserPool;
+import io.github.hectorvent.floci.services.cognito.model.UserPoolClient;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@ApplicationScoped
+public class CognitoJsonHandler {
+
+    private final CognitoService service;
+    private final ObjectMapper objectMapper;
+
+    @Inject
+    public CognitoJsonHandler(CognitoService service, ObjectMapper objectMapper) {
+        this.service = service;
+        this.objectMapper = objectMapper;
+    }
+
+    public Response handle(String action, JsonNode request, String region) {
+        return switch (action) {
+            case "CreateUserPool" -> handleCreateUserPool(request, region);
+            case "DescribeUserPool" -> handleDescribeUserPool(request);
+            case "ListUserPools" -> handleListUserPools(request);
+            case "DeleteUserPool" -> handleDeleteUserPool(request);
+            case "CreateUserPoolClient" -> handleCreateUserPoolClient(request);
+            case "DescribeUserPoolClient" -> handleDescribeUserPoolClient(request);
+            case "ListUserPoolClients" -> handleListUserPoolClients(request);
+            case "DeleteUserPoolClient" -> handleDeleteUserPoolClient(request);
+            case "AdminCreateUser" -> handleAdminCreateUser(request);
+            case "AdminGetUser" -> handleAdminGetUser(request);
+            case "AdminDeleteUser" -> handleAdminDeleteUser(request);
+            case "AdminSetUserPassword" -> handleAdminSetUserPassword(request);
+            case "AdminUpdateUserAttributes" -> handleAdminUpdateUserAttributes(request);
+            case "ListUsers" -> handleListUsers(request);
+            case "InitiateAuth" -> handleInitiateAuth(request);
+            case "AdminInitiateAuth" -> handleAdminInitiateAuth(request);
+            case "RespondToAuthChallenge" -> handleRespondToAuthChallenge(request);
+            case "SignUp" -> handleSignUp(request);
+            case "ConfirmSignUp" -> handleConfirmSignUp(request);
+            case "ChangePassword" -> handleChangePassword(request);
+            case "ForgotPassword" -> handleForgotPassword(request);
+            case "ConfirmForgotPassword" -> handleConfirmForgotPassword(request);
+            case "GetUser" -> handleGetUser(request);
+            case "UpdateUserAttributes" -> handleUpdateUserAttributes(request);
+            default -> Response.status(400)
+                    .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
+                    .build();
+        };
+    }
+
+    private Response handleCreateUserPool(JsonNode request, String region) {
+        String poolName = request.path("PoolName").asText();
+        UserPool pool = service.createUserPool(poolName, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("UserPool", userPoolToNode(pool));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDescribeUserPool(JsonNode request) {
+        UserPool pool = service.describeUserPool(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("UserPool", userPoolToNode(pool));
+        return Response.ok(response).build();
+    }
+
+    private Response handleListUserPools(JsonNode request) {
+        List<UserPool> pools = service.listUserPools();
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("UserPools");
+        pools.forEach(p -> items.add(userPoolToNode(p)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteUserPool(JsonNode request) {
+        service.deleteUserPool(request.path("UserPoolId").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleCreateUserPoolClient(JsonNode request) {
+        UserPoolClient client = service.createUserPoolClient(
+                request.path("UserPoolId").asText(),
+                request.path("ClientName").asText()
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("UserPoolClient", clientToNode(client));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDescribeUserPoolClient(JsonNode request) {
+        UserPoolClient client = service.describeUserPoolClient(
+                request.path("UserPoolId").asText(),
+                request.path("ClientId").asText()
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("UserPoolClient", clientToNode(client));
+        return Response.ok(response).build();
+    }
+
+    private Response handleListUserPoolClients(JsonNode request) {
+        List<UserPoolClient> clients = service.listUserPoolClients(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("UserPoolClients");
+        clients.forEach(c -> items.add(clientToNode(c)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteUserPoolClient(JsonNode request) {
+        service.deleteUserPoolClient(
+                request.path("UserPoolId").asText(),
+                request.path("ClientId").asText()
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminCreateUser(JsonNode request) {
+        Map<String, String> attrs = new HashMap<>();
+        request.path("UserAttributes").forEach(a -> attrs.put(a.path("Name").asText(), a.path("Value").asText()));
+        String tempPassword = request.path("TemporaryPassword").isMissingNode() ? null
+                : request.path("TemporaryPassword").asText(null);
+
+        CognitoUser user = service.adminCreateUser(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText(),
+                attrs,
+                tempPassword
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.set("User", userToNode(user));
+        return Response.ok(response).build();
+    }
+
+    private Response handleAdminGetUser(JsonNode request) {
+        CognitoUser user = service.adminGetUser(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText()
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("Username", user.getUsername());
+        response.put("UserStatus", user.getUserStatus());
+        response.put("Enabled", user.isEnabled());
+        response.put("UserCreateDate", user.getCreationDate());
+        response.put("UserLastModifiedDate", user.getLastModifiedDate());
+        ArrayNode attrs = response.putArray("UserAttributes");
+        user.getAttributes().forEach((k, v) -> {
+            ObjectNode attr = attrs.addObject();
+            attr.put("Name", k);
+            attr.put("Value", v);
+        });
+        return Response.ok(response).build();
+    }
+
+    private Response handleAdminDeleteUser(JsonNode request) {
+        service.adminDeleteUser(request.path("UserPoolId").asText(), request.path("Username").asText());
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminSetUserPassword(JsonNode request) {
+        service.adminSetUserPassword(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText(),
+                request.path("Password").asText(),
+                request.path("Permanent").asBoolean(true)
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleAdminUpdateUserAttributes(JsonNode request) {
+        Map<String, String> attrs = new HashMap<>();
+        request.path("UserAttributes").forEach(a -> attrs.put(a.path("Name").asText(), a.path("Value").asText()));
+        service.adminUpdateUserAttributes(
+                request.path("UserPoolId").asText(),
+                request.path("Username").asText(),
+                attrs
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleListUsers(JsonNode request) {
+        List<CognitoUser> users = service.listUsers(request.path("UserPoolId").asText());
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode items = response.putArray("Users");
+        users.forEach(u -> items.add(userToNode(u)));
+        return Response.ok(response).build();
+    }
+
+    private Response handleInitiateAuth(JsonNode request) {
+        Map<String, String> params = new HashMap<>();
+        request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+
+        Map<String, Object> result = service.initiateAuth(
+                request.path("ClientId").asText(),
+                request.path("AuthFlow").asText(),
+                params
+        );
+        return Response.ok(objectMapper.valueToTree(result)).build();
+    }
+
+    private Response handleAdminInitiateAuth(JsonNode request) {
+        Map<String, String> params = new HashMap<>();
+        request.path("AuthParameters").fields().forEachRemaining(e -> params.put(e.getKey(), e.getValue().asText()));
+
+        Map<String, Object> result = service.adminInitiateAuth(
+                request.path("UserPoolId").asText(),
+                request.path("ClientId").asText(),
+                request.path("AuthFlow").asText(),
+                params
+        );
+        return Response.ok(objectMapper.valueToTree(result)).build();
+    }
+
+    private Response handleRespondToAuthChallenge(JsonNode request) {
+        Map<String, String> responses = new HashMap<>();
+        request.path("ChallengeResponses").fields().forEachRemaining(e -> responses.put(e.getKey(), e.getValue().asText()));
+
+        Map<String, Object> result = service.respondToAuthChallenge(
+                request.path("ClientId").asText(),
+                request.path("ChallengeName").asText(),
+                request.path("Session").asText(null),
+                responses
+        );
+        return Response.ok(objectMapper.valueToTree(result)).build();
+    }
+
+    private Response handleSignUp(JsonNode request) {
+        Map<String, String> attrs = new HashMap<>();
+        request.path("UserAttributes").forEach(a -> attrs.put(a.path("Name").asText(), a.path("Value").asText()));
+
+        CognitoUser user = service.signUp(
+                request.path("ClientId").asText(),
+                request.path("Username").asText(),
+                request.path("Password").asText(),
+                attrs
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("UserConfirmed", "CONFIRMED".equals(user.getUserStatus()));
+        response.put("UserSub", user.getUsername());
+        ObjectNode delivery = response.putObject("CodeDeliveryDetails");
+        delivery.put("AttributeName", "email");
+        delivery.put("DeliveryMedium", "EMAIL");
+        delivery.put("Destination", user.getAttributes().getOrDefault("email", "****"));
+        return Response.ok(response).build();
+    }
+
+    private Response handleConfirmSignUp(JsonNode request) {
+        service.confirmSignUp(
+                request.path("ClientId").asText(),
+                request.path("Username").asText()
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleChangePassword(JsonNode request) {
+        service.changePassword(
+                request.path("AccessToken").asText(),
+                request.path("PreviousPassword").asText(),
+                request.path("ProposedPassword").asText()
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleForgotPassword(JsonNode request) {
+        service.forgotPassword(
+                request.path("ClientId").asText(),
+                request.path("Username").asText()
+        );
+        ObjectNode response = objectMapper.createObjectNode();
+        ObjectNode delivery = response.putObject("CodeDeliveryDetails");
+        delivery.put("AttributeName", "email");
+        delivery.put("DeliveryMedium", "EMAIL");
+        delivery.put("Destination", "****");
+        return Response.ok(response).build();
+    }
+
+    private Response handleConfirmForgotPassword(JsonNode request) {
+        service.confirmForgotPassword(
+                request.path("ClientId").asText(),
+                request.path("Username").asText(),
+                request.path("ConfirmationCode").asText(),
+                request.path("Password").asText()
+        );
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleGetUser(JsonNode request) {
+        Map<String, Object> result = service.getUser(request.path("AccessToken").asText());
+        return Response.ok(objectMapper.valueToTree(result)).build();
+    }
+
+    private Response handleUpdateUserAttributes(JsonNode request) {
+        Map<String, String> attrs = new HashMap<>();
+        request.path("UserAttributes").forEach(a -> attrs.put(a.path("Name").asText(), a.path("Value").asText()));
+        service.updateUserAttributes(request.path("AccessToken").asText(), attrs);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.putArray("CodeDeliveryDetailsList");
+        return Response.ok(response).build();
+    }
+
+    private ObjectNode userPoolToNode(UserPool p) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("Id", p.getId());
+        node.put("Name", p.getName());
+        node.put("CreationDate", p.getCreationDate());
+        node.put("LastModifiedDate", p.getLastModifiedDate());
+        return node;
+    }
+
+    private ObjectNode clientToNode(UserPoolClient c) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("ClientId", c.getClientId());
+        node.put("UserPoolId", c.getUserPoolId());
+        node.put("ClientName", c.getClientName());
+        node.put("CreationDate", c.getCreationDate());
+        node.put("LastModifiedDate", c.getLastModifiedDate());
+        return node;
+    }
+
+    private ObjectNode userToNode(CognitoUser u) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("Username", u.getUsername());
+        node.put("UserStatus", u.getUserStatus());
+        node.put("Enabled", u.isEnabled());
+        node.put("UserCreateDate", u.getCreationDate());
+        node.put("UserLastModifiedDate", u.getLastModifiedDate());
+        ArrayNode attrs = node.putArray("Attributes");
+        u.getAttributes().forEach((k, v) -> {
+            ObjectNode attr = attrs.addObject();
+            attr.put("Name", k);
+            attr.put("Value", v);
+        });
+        return node;
+    }
+
+}

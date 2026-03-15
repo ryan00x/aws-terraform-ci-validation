@@ -1,0 +1,313 @@
+package io.github.hectorvent.floci.services.secretsmanager;
+
+import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.services.secretsmanager.model.Secret;
+import io.github.hectorvent.floci.services.secretsmanager.model.SecretVersion;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@ApplicationScoped
+public class SecretsManagerJsonHandler {
+
+    private final SecretsManagerService service;
+    private final ObjectMapper objectMapper;
+
+    @Inject
+    public SecretsManagerJsonHandler(SecretsManagerService service, ObjectMapper objectMapper) {
+        this.service = service;
+        this.objectMapper = objectMapper;
+    }
+
+    public Response handle(String action, JsonNode request, String region) {
+        return switch (action) {
+            case "CreateSecret" -> handleCreateSecret(request, region);
+            case "GetSecretValue" -> handleGetSecretValue(request, region);
+            case "PutSecretValue" -> handlePutSecretValue(request, region);
+            case "UpdateSecret" -> handleUpdateSecret(request, region);
+            case "DescribeSecret" -> handleDescribeSecret(request, region);
+            case "ListSecrets" -> handleListSecrets(request, region);
+            case "DeleteSecret" -> handleDeleteSecret(request, region);
+            case "RotateSecret" -> handleRotateSecret(request, region);
+            case "TagResource" -> handleTagResource(request, region);
+            case "UntagResource" -> handleUntagResource(request, region);
+            case "ListSecretVersionIds" -> handleListSecretVersionIds(request, region);
+            case "GetResourcePolicy" -> handleGetResourcePolicy(request, region);
+            case "DeleteResourcePolicy" -> Response.ok(objectMapper.createObjectNode()).build();
+            case "PutResourcePolicy" -> Response.ok(objectMapper.createObjectNode()).build();
+            default -> Response.status(400)
+                    .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
+                    .build();
+        };
+    }
+
+    private Response handleCreateSecret(JsonNode request, String region) {
+        String name = request.path("Name").asText();
+        String secretString = request.has("SecretString") ? request.path("SecretString").asText() : null;
+        String secretBinary = request.has("SecretBinary") ? request.path("SecretBinary").asText() : null;
+        String description = request.has("Description") ? request.path("Description").asText() : null;
+        String kmsKeyId = request.has("KmsKeyId") ? request.path("KmsKeyId").asText() : null;
+        List<Secret.Tag> tags = parseTags(request);
+
+        Secret secret = service.createSecret(name, secretString, secretBinary, description, kmsKeyId, tags, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        response.put("VersionId", secret.getCurrentVersionId());
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetSecretValue(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        String versionId = request.has("VersionId") ? request.path("VersionId").asText() : null;
+        String versionStage = request.has("VersionStage") ? request.path("VersionStage").asText() : null;
+
+        Secret secret = service.describeSecret(secretId, region);
+        SecretVersion version = service.getSecretValue(secretId, versionId, versionStage, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        response.put("VersionId", version.getVersionId());
+        if (version.getSecretString() != null) {
+            response.put("SecretString", version.getSecretString());
+        }
+        if (version.getSecretBinary() != null) {
+            response.put("SecretBinary", version.getSecretBinary());
+        }
+        if (version.getCreatedDate() != null) {
+            response.put("CreatedDate", version.getCreatedDate().toEpochMilli() / 1000.0);
+        }
+        ArrayNode stages = objectMapper.createArrayNode();
+        if (version.getVersionStages() != null) {
+            version.getVersionStages().forEach(stages::add);
+        }
+        response.set("VersionStages", stages);
+        return Response.ok(response).build();
+    }
+
+    private Response handlePutSecretValue(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        String secretString = request.has("SecretString") ? request.path("SecretString").asText() : null;
+        String secretBinary = request.has("SecretBinary") ? request.path("SecretBinary").asText() : null;
+
+        Secret secret = service.describeSecret(secretId, region);
+        SecretVersion version = service.putSecretValue(secretId, secretString, secretBinary, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        response.put("VersionId", version.getVersionId());
+        ArrayNode stages = objectMapper.createArrayNode();
+        if (version.getVersionStages() != null) {
+            version.getVersionStages().forEach(stages::add);
+        }
+        response.set("VersionStages", stages);
+        return Response.ok(response).build();
+    }
+
+    private Response handleUpdateSecret(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        String description = request.has("Description") ? request.path("Description").asText() : null;
+        String kmsKeyId = request.has("KmsKeyId") ? request.path("KmsKeyId").asText() : null;
+        String secretString = request.has("SecretString") ? request.path("SecretString").asText() : null;
+        String secretBinary = request.has("SecretBinary") ? request.path("SecretBinary").asText() : null;
+
+        Secret secret = service.updateSecret(secretId, description, kmsKeyId, region);
+
+        if (secretString != null || secretBinary != null) {
+            service.putSecretValue(secretId, secretString, secretBinary, region);
+        }
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        return Response.ok(response).build();
+    }
+
+    private Response handleDescribeSecret(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        Secret secret = service.describeSecret(secretId, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        if (secret.getDescription() != null) {
+            response.put("Description", secret.getDescription());
+        }
+        response.put("RotationEnabled", secret.isRotationEnabled());
+        if (secret.getCreatedDate() != null) {
+            response.put("CreatedDate", secret.getCreatedDate().toEpochMilli() / 1000.0);
+        }
+        if (secret.getLastChangedDate() != null) {
+            response.put("LastChangedDate", secret.getLastChangedDate().toEpochMilli() / 1000.0);
+        }
+        if (secret.getDeletedDate() != null) {
+            response.put("DeletedDate", secret.getDeletedDate().toEpochMilli() / 1000.0);
+        }
+
+        ArrayNode tagsArray = objectMapper.createArrayNode();
+        if (secret.getTags() != null) {
+            for (Secret.Tag tag : secret.getTags()) {
+                ObjectNode tagNode = objectMapper.createObjectNode();
+                tagNode.put("Key", tag.key());
+                tagNode.put("Value", tag.value());
+                tagsArray.add(tagNode);
+            }
+        }
+        response.set("Tags", tagsArray);
+
+        ObjectNode versionIdsToStages = objectMapper.createObjectNode();
+        if (secret.getVersions() != null) {
+            for (Map.Entry<String, SecretVersion> entry
+                    : secret.getVersions().entrySet()) {
+                ArrayNode stagesArray = objectMapper.createArrayNode();
+                if (entry.getValue().getVersionStages() != null) {
+                    entry.getValue().getVersionStages().forEach(stagesArray::add);
+                }
+                versionIdsToStages.set(entry.getKey(), stagesArray);
+            }
+        }
+        response.set("VersionIdsToStages", versionIdsToStages);
+        return Response.ok(response).build();
+    }
+
+    private Response handleListSecrets(JsonNode request, String region) {
+        List<Secret> secrets = service.listSecrets(region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode secretList = objectMapper.createArrayNode();
+        for (Secret secret : secrets) {
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("ARN", secret.getArn());
+            node.put("Name", secret.getName());
+            if (secret.getDescription() != null) {
+                node.put("Description", secret.getDescription());
+            }
+            if (secret.getLastChangedDate() != null) {
+                node.put("LastChangedDate", secret.getLastChangedDate().toEpochMilli() / 1000.0);
+            }
+            ArrayNode tagsArray = objectMapper.createArrayNode();
+            if (secret.getTags() != null) {
+                for (Secret.Tag tag : secret.getTags()) {
+                    ObjectNode tagNode = objectMapper.createObjectNode();
+                    tagNode.put("Key", tag.key());
+                    tagNode.put("Value", tag.value());
+                    tagsArray.add(tagNode);
+                }
+            }
+            node.set("Tags", tagsArray);
+            secretList.add(node);
+        }
+        response.set("SecretList", secretList);
+        return Response.ok(response).build();
+    }
+
+    private Response handleDeleteSecret(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        boolean forceDelete = request.path("ForceDeleteWithoutRecovery").asBoolean(false);
+        Integer recoveryWindowInDays = request.has("RecoveryWindowInDays")
+                ? request.path("RecoveryWindowInDays").asInt() : null;
+
+        Secret secret = service.deleteSecret(secretId, recoveryWindowInDays, forceDelete, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        if (secret.getDeletedDate() != null) {
+            response.put("DeletionDate", secret.getDeletedDate().toEpochMilli() / 1000.0);
+        }
+        return Response.ok(response).build();
+    }
+
+    private Response handleRotateSecret(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        String lambdaArn = request.has("RotationLambdaARN") ? request.path("RotationLambdaARN").asText() : null;
+        boolean rotateImmediately = request.path("RotateImmediately").asBoolean(true);
+
+        Map<String, Integer> rules = new HashMap<>();
+        JsonNode rulesNode = request.path("RotationRules");
+        if (rulesNode.has("AutomaticallyAfterDays")) {
+            rules.put("AutomaticallyAfterDays", rulesNode.path("AutomaticallyAfterDays").asInt());
+        }
+
+        Secret secret = service.rotateSecret(secretId, lambdaArn, rules, rotateImmediately, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        return Response.ok(response).build();
+    }
+
+    private Response handleTagResource(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        List<Secret.Tag> tags = parseTags(request);
+        service.tagResource(secretId, tags, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleUntagResource(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        List<String> tagKeys = new ArrayList<>();
+        request.path("TagKeys").forEach(k -> tagKeys.add(k.asText()));
+        service.untagResource(secretId, tagKeys, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleListSecretVersionIds(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        Secret secret = service.describeSecret(secretId, region);
+        Map<String, List<String>> versionMap = service.listSecretVersionIds(secretId, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+
+        ArrayNode versions = objectMapper.createArrayNode();
+        for (Map.Entry<String, List<String>> entry : versionMap.entrySet()) {
+            ObjectNode versionNode = objectMapper.createObjectNode();
+            versionNode.put("VersionId", entry.getKey());
+            ArrayNode stagesArray = objectMapper.createArrayNode();
+            if (entry.getValue() != null) {
+                entry.getValue().forEach(stagesArray::add);
+            }
+            versionNode.set("VersionStages", stagesArray);
+            SecretVersion sv = secret.getVersions() != null ? secret.getVersions().get(entry.getKey()) : null;
+            if (sv != null && sv.getCreatedDate() != null) {
+                versionNode.put("CreatedDate", sv.getCreatedDate().toEpochMilli() / 1000.0);
+            }
+            versions.add(versionNode);
+        }
+        response.set("Versions", versions);
+        return Response.ok(response).build();
+    }
+
+    private Response handleGetResourcePolicy(JsonNode request, String region) {
+        String secretId = request.path("SecretId").asText();
+        Secret secret = service.describeSecret(secretId, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("ARN", secret.getArn());
+        response.put("Name", secret.getName());
+        return Response.ok(response).build();
+    }
+
+    private List<Secret.Tag> parseTags(JsonNode request) {
+        List<Secret.Tag> tags = new ArrayList<>();
+        JsonNode tagsNode = request.path("Tags");
+        if (tagsNode.isArray()) {
+            tagsNode.forEach(t -> tags.add(new Secret.Tag(t.path("Key").asText(), t.path("Value").asText())));
+        }
+        return tags;
+    }
+
+}

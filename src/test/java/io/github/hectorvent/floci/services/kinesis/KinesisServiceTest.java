@@ -1,0 +1,209 @@
+package io.github.hectorvent.floci.services.kinesis;
+
+import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.kinesis.model.KinesisConsumer;
+import io.github.hectorvent.floci.services.kinesis.model.KinesisStream;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class KinesisServiceTest {
+
+    private static final String REGION = "us-east-1";
+
+    private KinesisService kinesisService;
+
+    @BeforeEach
+    void setUp() {
+        kinesisService = new KinesisService(
+                new InMemoryStorage<>(),
+                new InMemoryStorage<>(),
+                new RegionResolver("us-east-1", "000000000000")
+        );
+    }
+
+    @Test
+    void createStream() {
+        KinesisStream stream = kinesisService.createStream("my-stream", 2, REGION);
+
+        assertEquals("my-stream", stream.getStreamName());
+        assertNotNull(stream.getStreamArn());
+        assertEquals(2, stream.getShards().size());
+        assertEquals("ACTIVE", stream.getStreamStatus());
+    }
+
+    @Test
+    void createStreamAlreadyExistsThrows() {
+        kinesisService.createStream("my-stream", 1, REGION);
+        assertThrows(AwsException.class, () ->
+                kinesisService.createStream("my-stream", 1, REGION));
+    }
+
+    @Test
+    void listStreams() {
+        kinesisService.createStream("stream-a", 1, REGION);
+        kinesisService.createStream("stream-b", 1, REGION);
+        kinesisService.createStream("other", 1, "eu-west-1");
+
+        List<String> names = kinesisService.listStreams(REGION);
+        assertEquals(2, names.size());
+        assertTrue(names.containsAll(List.of("stream-a", "stream-b")));
+    }
+
+    @Test
+    void describeStreamNotFound() {
+        assertThrows(AwsException.class, () ->
+                kinesisService.describeStream("missing", REGION));
+    }
+
+    @Test
+    void deleteStream() {
+        kinesisService.createStream("to-delete", 1, REGION);
+        kinesisService.deleteStream("to-delete", REGION);
+
+        assertTrue(kinesisService.listStreams(REGION).isEmpty());
+    }
+
+    @Test
+    void putAndGetRecord() {
+        kinesisService.createStream("my-stream", 1, REGION);
+        String seqNum = kinesisService.putRecord("my-stream",
+                "hello".getBytes(StandardCharsets.UTF_8), "partition-1", REGION);
+
+        assertNotNull(seqNum);
+
+        KinesisStream stream = kinesisService.describeStream("my-stream", REGION);
+        String shardId = stream.getShards().getFirst().getShardId();
+
+        String iterator = kinesisService.getShardIterator("my-stream", shardId,
+                "TRIM_HORIZON", null, REGION);
+        Map<String, Object> result = kinesisService.getRecords(iterator, 10, REGION);
+
+        @SuppressWarnings("unchecked")
+        var records = (List<?>) result.get("Records");
+        assertEquals(1, records.size());
+    }
+
+    @Test
+    void getRecordsLatestIteratorReturnsEmpty() {
+        kinesisService.createStream("my-stream", 1, REGION);
+        kinesisService.putRecord("my-stream", "msg".getBytes(StandardCharsets.UTF_8), "pk", REGION);
+
+        String shardId = kinesisService.describeStream("my-stream", REGION).getShards().getFirst().getShardId();
+        String iterator = kinesisService.getShardIterator("my-stream", shardId, "LATEST", null, REGION);
+        Map<String, Object> result = kinesisService.getRecords(iterator, 10, REGION);
+
+        @SuppressWarnings("unchecked")
+        var records = (List<?>) result.get("Records");
+        assertTrue(records.isEmpty());
+    }
+
+    @Test
+    void addAndListTags() {
+        kinesisService.createStream("tagged", 1, REGION);
+        kinesisService.addTagsToStream("tagged", Map.of("env", "prod", "team", "infra"), REGION);
+
+        Map<String, String> tags = kinesisService.listTagsForStream("tagged", REGION);
+        assertEquals("prod", tags.get("env"));
+        assertEquals("infra", tags.get("team"));
+    }
+
+    @Test
+    void removeTags() {
+        kinesisService.createStream("tagged", 1, REGION);
+        kinesisService.addTagsToStream("tagged", Map.of("env", "prod", "team", "infra"), REGION);
+        kinesisService.removeTagsFromStream("tagged", List.of("env"), REGION);
+
+        Map<String, String> tags = kinesisService.listTagsForStream("tagged", REGION);
+        assertFalse(tags.containsKey("env"));
+        assertTrue(tags.containsKey("team"));
+    }
+
+    @Test
+    void registerAndDescribeConsumer() {
+        KinesisStream stream = kinesisService.createStream("my-stream", 1, REGION);
+        KinesisConsumer consumer = kinesisService.registerStreamConsumer(
+                stream.getStreamArn(), "my-consumer", REGION);
+
+        assertNotNull(consumer.getConsumerArn());
+        assertEquals("my-consumer", consumer.getConsumerName());
+
+        KinesisConsumer described = kinesisService.describeStreamConsumer(
+                stream.getStreamArn(), "my-consumer", null, REGION);
+        assertEquals(consumer.getConsumerArn(), described.getConsumerArn());
+    }
+
+    @Test
+    void listStreamConsumers() {
+        KinesisStream stream = kinesisService.createStream("my-stream", 1, REGION);
+        kinesisService.registerStreamConsumer(stream.getStreamArn(), "c1", REGION);
+        kinesisService.registerStreamConsumer(stream.getStreamArn(), "c2", REGION);
+
+        List<KinesisConsumer> consumers = kinesisService.listStreamConsumers(stream.getStreamArn(), REGION);
+        assertEquals(2, consumers.size());
+    }
+
+    @Test
+    void deregisterConsumer() {
+        KinesisStream stream = kinesisService.createStream("my-stream", 1, REGION);
+        KinesisConsumer consumer = kinesisService.registerStreamConsumer(
+                stream.getStreamArn(), "my-consumer", REGION);
+
+        kinesisService.deregisterStreamConsumer(
+                stream.getStreamArn(), "my-consumer", consumer.getConsumerArn(), REGION);
+
+        assertTrue(kinesisService.listStreamConsumers(stream.getStreamArn(), REGION).isEmpty());
+    }
+
+    @Test
+    void splitShard() {
+        kinesisService.createStream("my-stream", 1, REGION);
+        KinesisStream stream = kinesisService.describeStream("my-stream", REGION);
+        String shardId = stream.getShards().getFirst().getShardId();
+
+        kinesisService.splitShard("my-stream", shardId, "170141183460469231731687303715884105728", REGION);
+
+        KinesisStream updated = kinesisService.describeStream("my-stream", REGION);
+        assertEquals(3, updated.getShards().size());
+        assertTrue(updated.getShards().getFirst().isClosed());
+    }
+
+    @Test
+    void mergeShards() {
+        kinesisService.createStream("my-stream", 2, REGION);
+        KinesisStream stream = kinesisService.describeStream("my-stream", REGION);
+        String shard0 = stream.getShards().get(0).getShardId();
+        String shard1 = stream.getShards().get(1).getShardId();
+
+        kinesisService.mergeShards("my-stream", shard0, shard1, REGION);
+
+        KinesisStream updated = kinesisService.describeStream("my-stream", REGION);
+        assertEquals(3, updated.getShards().size());
+        assertTrue(updated.getShards().get(0).isClosed());
+        assertTrue(updated.getShards().get(1).isClosed());
+        assertFalse(updated.getShards().get(2).isClosed());
+    }
+
+    @Test
+    void startAndStopEncryption() {
+        kinesisService.createStream("my-stream", 1, REGION);
+        kinesisService.startStreamEncryption("my-stream", "KMS", "my-key-id", REGION);
+
+        KinesisStream encrypted = kinesisService.describeStream("my-stream", REGION);
+        assertEquals("KMS", encrypted.getEncryptionType());
+        assertEquals("my-key-id", encrypted.getKeyId());
+
+        kinesisService.stopStreamEncryption("my-stream", REGION);
+
+        KinesisStream unencrypted = kinesisService.describeStream("my-stream", REGION);
+        assertEquals("NONE", unencrypted.getEncryptionType());
+        assertNull(unencrypted.getKeyId());
+    }
+}

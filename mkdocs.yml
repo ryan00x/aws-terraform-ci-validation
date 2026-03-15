@@ -1,0 +1,88 @@
+site_name: Floci
+site_description: Fast, free, open-source local AWS emulator
+site_url: https://hectorvent.github.io/floci
+repo_url: https://github.com/hectorvent/floci
+repo_name: hectorvent/floci
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+extra_css:
+  - assets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: getting-started/quick-start.md
+    - Installation: getting-started/installation.md
+    - AWS CLI & SDK Setup: getting-started/aws-setup.md
+  - Configuration:
+    - Docker Compose: configuration/docker-compose.md
+    - Ports Reference: configuration/ports.md
+    - application.yml Reference: configuration/application-yml.md
+    - Storage Modes: configuration/storage.md
+  - Services:
+    - Overview: services/index.md
+    - SSM Parameter Store: services/ssm.md
+    - SQS: services/sqs.md
+    - SNS: services/sns.md
+    - S3: services/s3.md
+    - DynamoDB: services/dynamodb.md
+    - Lambda: services/lambda.md
+    - API Gateway: services/api-gateway.md
+    - Cognito: services/cognito.md
+    - KMS: services/kms.md
+    - Kinesis: services/kinesis.md
+    - Secrets Manager: services/secrets-manager.md
+    - CloudFormation: services/cloudformation.md
+    - Step Functions: services/step-functions.md
+    - IAM: services/iam.md
+    - STS: services/sts.md
+    - ElastiCache: services/elasticache.md
+    - RDS: services/rds.md
+    - EventBridge: services/eventbridge.md
+    - CloudWatch: services/cloudwatch.md
+  - Contributing: contributing.md
