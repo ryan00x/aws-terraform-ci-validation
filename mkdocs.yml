@@ -1,6 +1,6 @@
 site_name: Floci
 site_description: Fast, free, open-source local AWS emulator
-site_url: https://hectorvent.github.io/floci
+site_url: https://hectorvent.dev/floci/
 repo_url: https://github.com/hectorvent/floci
 repo_name: hectorvent/floci
 edit_uri: edit/main/docs/
