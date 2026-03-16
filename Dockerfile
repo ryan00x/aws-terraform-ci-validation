@@ -22,6 +22,6 @@ VOLUME /app/data
 EXPOSE 4566 6379-6399
 
 ARG VERSION=latest
-ENV FLOCI_VERSION=1.0.1
+ENV FLOCI_VERSION=1.0.2
 
 ENTRYPOINT ["java", "-jar", "quarkus-app/quarkus-run.jar"]
