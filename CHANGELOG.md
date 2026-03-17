@@ -1,3 +1,10 @@
+## [1.0.4-dev.2](https://github.com/hectorvent/floci/compare/1.0.4-dev.1...1.0.4-dev.2) (2026-03-17)
+
+
+### Bug Fixes
+
+* rename github action ([1fe1f6b](https://github.com/hectorvent/floci/commit/1fe1f6b7d87aa25573f015e2483b1c98a5962c4a))
+
 ## [1.0.4-dev.1](https://github.com/hectorvent/floci/compare/1.0.3...1.0.4-dev.1) (2026-03-17)
 
 
