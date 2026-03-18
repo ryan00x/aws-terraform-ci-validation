@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - "docs/**"
       - "mkdocs.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   deploy:
@@ -25,5 +26,21 @@ jobs:
       - name: Install MkDocs
         run: pip install -r docs/requirements.txt
 
-      - name: Deploy to GitHub Pages
-        run: mkdocs gh-deploy --force
+      - name: Build docs
+        run: mkdocs build --site-dir site
+
+      - name: Deploy to hectorvent.github.io/static/floci
+        env:
+          PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+        run: |
+          git clone --depth=1 https://x-access-token:${PAGES_TOKEN}@github.com/hectorvent/hectorvent.github.io.git pages-repo
+
+          rm -rf pages-repo/static/floci
+          cp -r site pages-repo/static/floci
+
+          cd pages-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add static/floci/
+          git diff --cached --quiet || git commit -m "docs: update floci docs"
+          git push
