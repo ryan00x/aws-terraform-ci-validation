@@ -1,3 +1,10 @@
+## [1.0.7](https://github.com/hectorvent/floci/compare/1.0.6...1.0.7) (2026-03-24)
+
+
+### Bug Fixes
+
+* s3 unit test error ([0d77526](https://github.com/hectorvent/floci/commit/0d77526e2e457e8827ce82042dc5854d62794fde))
+
 ## [1.0.6](https://github.com/hectorvent/floci/compare/1.0.5...1.0.6) (2026-03-24)
 
 
