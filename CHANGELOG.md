@@ -1,3 +1,10 @@
+## [1.0.9](https://github.com/hectorvent/floci/compare/1.0.8...1.0.9) (2026-03-24)
+
+
+### Bug Fixes
+
+* add ruby lambda runtime support ([#18](https://github.com/hectorvent/floci/issues/18)) ([38bdaf9](https://github.com/hectorvent/floci/commit/38bdaf9616bdb833dbe1b8d4f13c30659b390768))
+
 ## [1.0.8](https://github.com/hectorvent/floci/compare/1.0.7...1.0.8) (2026-03-24)
 
 
