@@ -1,3 +1,10 @@
+## [1.0.6](https://github.com/hectorvent/floci/compare/1.0.5...1.0.6) (2026-03-24)
+
+
+### Bug Fixes
+
+* **s3:** truncate LastModified timestamps to second precision ([#24](https://github.com/hectorvent/floci/issues/24)) ([ad31e7a](https://github.com/hectorvent/floci/commit/ad31e7a7b7ed8850ba668f7f09c3cad6dc8c81b0))
+
 ## [1.0.5](https://github.com/hectorvent/floci/compare/1.0.4...1.0.5) (2026-03-23)
 
 
