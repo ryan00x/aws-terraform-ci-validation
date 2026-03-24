@@ -1,3 +1,10 @@
+## [1.0.8](https://github.com/hectorvent/floci/compare/1.0.7...1.0.8) (2026-03-24)
+
+
+### Bug Fixes
+
+* return NoSuchVersion error for non-existent versionId ([5576222](https://github.com/hectorvent/floci/commit/557622299951b50c795204503ef727b8dac9b6b8))
+
 ## [1.0.7](https://github.com/hectorvent/floci/compare/1.0.6...1.0.7) (2026-03-24)
 
 
