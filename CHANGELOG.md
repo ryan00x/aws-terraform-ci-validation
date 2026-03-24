@@ -1,3 +1,10 @@
+## [1.0.10](https://github.com/hectorvent/floci/compare/1.0.9...1.0.10) (2026-03-24)
+
+
+### Bug Fixes
+
+* return versionId in CompleteMultipartUpload response ([#35](https://github.com/hectorvent/floci/issues/35)) ([6e8713d](https://github.com/hectorvent/floci/commit/6e8713d9fe4e1b3f6536f979899209daa00b0a04)), closes [hectorvent/floci#32](https://github.com/hectorvent/floci/issues/32)
+
 ## [1.0.9](https://github.com/hectorvent/floci/compare/1.0.8...1.0.9) (2026-03-24)
 
 
