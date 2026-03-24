@@ -83,7 +83,7 @@ class S3ServiceTest {
 
     @Test
     void putObjectLastModifiedHasSecondPrecision() {
-        s3Service.createBucket("test-bucket");
+        s3Service.createBucket("test-bucket", null);
         S3Object obj = s3Service.putObject("test-bucket", "file.txt", "data".getBytes(), null, null);
         assertEquals(0, obj.getLastModified().getNano());
     }
