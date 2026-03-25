@@ -1,6 +1,6 @@
 name: Release
 
-# Triggered when a version tag (e.g. v1.2.3) is pushed.
+# Triggered when a version tag (e.g. 1.2.3) is pushed.
 # Builds native (amd64 + arm64) and JVM Docker images and pushes them to Docker Hub.
 #
 # Published tags:
@@ -106,7 +106,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Strip the leading 'v' so Docker tags are e.g. 1.2.3, not v1.2.3
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
