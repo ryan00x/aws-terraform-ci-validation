@@ -1,6 +1,10 @@
 package io.github.hectorvent.floci.services.sns;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.RestAssured;
+import io.restassured.config.EncoderConfig;
+import io.restassured.http.ContentType;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -15,6 +19,15 @@ import static org.hamcrest.Matchers.*;
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class SnsIntegrationTest {
+
+    private static final String SNS_CONTENT_TYPE = "application/x-amz-json-1.0";
+
+    @BeforeAll
+    static void configureRestAssured() {
+        RestAssured.config = RestAssured.config().encoderConfig(
+                EncoderConfig.encoderConfig()
+                        .encodeContentTypeAs(SNS_CONTENT_TYPE, ContentType.TEXT));
+    }
 
     private static String topicArn;
     private static String subscriptionArn;
@@ -190,6 +203,53 @@ class SnsIntegrationTest {
     }
 
     @Test
+    @Order(20)
+    void publishBatch_jsonProtocol() {
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.PublishBatch")
+            .body("""
+                {
+                    "TopicArn": "%s",
+                    "PublishBatchRequestEntries": [
+                        {"Id": "json-msg1", "Message": "JSON batch message 1"},
+                        {"Id": "json-msg2", "Message": "JSON batch message 2", "Subject": "Test"}
+                    ]
+                }
+                """.formatted(topicArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Successful.size()", equalTo(2))
+            .body("Successful[0].Id", equalTo("json-msg1"))
+            .body("Successful[0].MessageId", notNullValue())
+            .body("Successful[1].Id", equalTo("json-msg2"))
+            .body("Successful[1].MessageId", notNullValue())
+            .body("Failed.size()", equalTo(0));
+    }
+
+    @Test
+    @Order(21)
+    void publishBatch_jsonProtocol_emptyEntries() {
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.PublishBatch")
+            .body("""
+                {
+                    "TopicArn": "%s",
+                    "PublishBatchRequestEntries": []
+                }
+                """.formatted(topicArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Successful.size()", equalTo(0))
+            .body("Failed.size()", equalTo(0));
+    }
+
+    @Test
     @Order(11)
     void tagResource() {
         given()
@@ -235,7 +295,71 @@ class SnsIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(22)
+    void getSubscriptionAttributes_jsonProtocol() {
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.GetSubscriptionAttributes")
+            .body("""
+                {"SubscriptionArn": "%s"}
+                """.formatted(subscriptionArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Attributes.SubscriptionArn", equalTo(subscriptionArn))
+            .body("Attributes.Protocol", equalTo("sqs"))
+            .body("Attributes.TopicArn", equalTo(topicArn));
+    }
+
+    @Test
+    @Order(23)
+    void setSubscriptionAttributes_jsonProtocol() {
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.SetSubscriptionAttributes")
+            .body("""
+                {
+                    "SubscriptionArn": "%s",
+                    "AttributeName": "RawMessageDelivery",
+                    "AttributeValue": "true"
+                }
+                """.formatted(subscriptionArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.GetSubscriptionAttributes")
+            .body("""
+                {"SubscriptionArn": "%s"}
+                """.formatted(subscriptionArn))
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Attributes.RawMessageDelivery", equalTo("true"));
+    }
+
+    @Test
+    @Order(24)
+    void getSubscriptionAttributes_jsonProtocol_notFound() {
+        given()
+            .contentType(SNS_CONTENT_TYPE)
+            .header("X-Amz-Target", "SNS_20100331.GetSubscriptionAttributes")
+            .body("""
+                {"SubscriptionArn": "arn:aws:sns:us-east-1:000000000000:nonexistent:fake-id"}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(404);
+    }
+
+    @Test
+    @Order(100)
     void unsubscribe() {
         given()
             .contentType("application/x-www-form-urlencoded")
@@ -258,7 +382,7 @@ class SnsIntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(101)
     void deleteTopic() {
         given()
             .contentType("application/x-www-form-urlencoded")
