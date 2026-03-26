@@ -10,6 +10,28 @@ public interface EmulatorConfig {
     @WithDefault("http://localhost:4566")
     String baseUrl();
 
+    /**
+     * When set, overrides the hostname in base-url for URLs returned in API responses
+     * (e.g. SQS QueueUrl, SNS TopicArn). This is needed in multi-container Docker setups
+     * where "localhost" in the response URL would resolve to the wrong container.
+     *
+     * Example: FLOCI_HOSTNAME=floci makes SQS return
+     * http://floci:4566/000000000000/my-queue instead of http://localhost:4566/...
+     *
+     * Equivalent to LocalStack's LOCALSTACK_HOSTNAME.
+     */
+    Optional<String> hostname();
+
+    /**
+     * Returns the effective base URL, taking hostname into account.
+     * If hostname is set, replaces the host in baseUrl with it.
+     */
+    default String effectiveBaseUrl() {
+        return hostname()
+                .map(h -> baseUrl().replaceFirst("://[^:/]+(:\\d+)?", "://" + h + "$1"))
+                .orElse(baseUrl());
+    }
+
     @WithDefault("us-east-1")
     String defaultRegion();
 
