@@ -182,6 +182,7 @@ public interface EmulatorConfig {
         StepFunctionsServiceConfig stepfunctions();
         CloudFormationServiceConfig cloudformation();
         AcmServiceConfig acm();
+        SesServiceConfig ses();
     }
 
     interface SsmServiceConfig {
@@ -334,6 +335,11 @@ public interface EmulatorConfig {
         /** Seconds to wait before transitioning from PENDING_VALIDATION to ISSUED (0 = immediate) */
         @WithDefault("0")
         int validationWaitSeconds();
+    }
+
+    interface SesServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface LambdaServiceConfig {
