@@ -186,6 +186,12 @@ services:
 
 Without this, SQS returns `http://localhost:4566/...` in QueueUrl responses, which resolves to the wrong container.
 
+## Contributors
+
+<a href="https://github.com/hectorvent/floci/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=hectorvent/floci" />
+</a>
+
 ## License
 
 MIT — use it however you want.
