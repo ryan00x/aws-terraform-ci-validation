@@ -40,6 +40,8 @@ floci:
         flush-interval-ms: 5000
       secretsmanager:
         flush-interval-ms: 5000
+      opensearch:
+        flush-interval-ms: 5000   # inherits global storage mode
 
   services:
     ssm:
@@ -121,6 +123,20 @@ floci:
 
     cloudformation:
       enabled: true
+
+    acm:
+      enabled: true
+      validation-wait-seconds: 0  # Seconds before transitioning PENDING_VALIDATION → ISSUED
+
+    ses:
+      enabled: true
+
+    opensearch:
+      enabled: true
+      mode: mock                                    # mock | real
+      default-image: "opensearchproject/opensearch:2"
+      proxy-base-port: 9400
+      proxy-max-port: 9499
 ```
 
 ## Service Limits

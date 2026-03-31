@@ -62,6 +62,8 @@ Override the global mode for individual services via environment variables. When
 | `FLOCI_STORAGE_SERVICES_SECRETSMANAGER_FLUSH_INTERVAL_MS`       | `5000`         | Secrets Manager flush interval (ms)    |
 | `FLOCI_STORAGE_SERVICES_ACM_MODE`                               | global default | ACM storage mode                       |
 | `FLOCI_STORAGE_SERVICES_ACM_FLUSH_INTERVAL_MS`                  | `5000`         | ACM flush interval (ms)                |
+| `FLOCI_STORAGE_SERVICES_OPENSEARCH_MODE`                        | global default | OpenSearch storage mode                |
+| `FLOCI_STORAGE_SERVICES_OPENSEARCH_FLUSH_INTERVAL_MS`           | `5000`         | OpenSearch flush interval (ms)         |
 
 ## Environment Variable Override
 
