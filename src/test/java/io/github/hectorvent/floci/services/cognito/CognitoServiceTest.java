@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.cognito;
 
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.cognito.model.CognitoGroup;
 import io.github.hectorvent.floci.services.cognito.model.CognitoUser;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -21,25 +23,53 @@ class CognitoServiceTest {
 
     private CognitoService service;
     private InMemoryStorage<String, CognitoGroup> groupStore;
+    private RegionResolver regionResolver;
 
     @BeforeEach
     void setUp() {
         groupStore = new InMemoryStorage<>();
+        regionResolver = new RegionResolver("us-east-1", "000000000000");
         service = new CognitoService(
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 groupStore,
-                "http://localhost:4566"
+                "http://localhost:4566",
+                regionResolver
         );
     }
 
     private UserPool createPoolAndUser() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.adminCreateUser(pool.getId(), "alice", Map.of("email", "alice@example.com"), "TempPass1!");
         service.adminSetUserPassword(pool.getId(), "alice", "Perm1234!", true);
         return pool;
+    }
+
+    @Test
+    void createUserPoolWithFullConfig() {
+        List<Map<String, Object>> schema = List.of(
+                Map.of("Name", "my-attr", "AttributeDataType", "String")
+        );
+        Map<String, Object> policies = Map.of(
+                "PasswordPolicy", Map.of("MinimumLength", 12)
+        );
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("PoolName", "FullConfigPool");
+        request.put("Schema", schema);
+        request.put("Policies", policies);
+        request.put("UsernameAttributes", List.of("email"));
+
+        UserPool pool = service.createUserPool(request, "us-east-1");
+
+        assertNotNull(pool.getId());
+        assertEquals("FullConfigPool", pool.getName());
+        assertEquals("arn:aws:cognito-idp:us-east-1:000000000000:userpool/" + pool.getId(), pool.getArn());
+        assertEquals(schema, pool.getSchemaAttributes());
+        assertEquals(policies, pool.getPolicies());
+        assertEquals(List.of("email"), pool.getUsernameAttributes());
     }
 
     // =========================================================================
@@ -48,7 +78,7 @@ class CognitoServiceTest {
 
     @Test
     void createGroup() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         CognitoGroup group = service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
 
         assertEquals("admins", group.getGroupName());
@@ -62,7 +92,7 @@ class CognitoServiceTest {
 
     @Test
     void createGroupDuplicateThrows() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
 
         assertThrows(AwsException.class, () ->
@@ -71,7 +101,7 @@ class CognitoServiceTest {
 
     @Test
     void getGroup() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
 
         CognitoGroup fetched = service.getGroup(pool.getId(), "admins");
@@ -83,7 +113,7 @@ class CognitoServiceTest {
 
     @Test
     void getGroupNotFoundThrows() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
 
         assertThrows(AwsException.class, () ->
                 service.getGroup(pool.getId(), "nonexistent"));
@@ -91,7 +121,7 @@ class CognitoServiceTest {
 
     @Test
     void listGroups() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
         service.createGroup(pool.getId(), "editors", "Editor group", 2, null);
 
@@ -101,7 +131,7 @@ class CognitoServiceTest {
 
     @Test
     void deleteGroup() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
 
         service.deleteGroup(pool.getId(), "admins");
@@ -201,7 +231,7 @@ class CognitoServiceTest {
 
     @Test
     void adminAddUserToGroupNonexistentUserThrows() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
 
         assertThrows(AwsException.class, () ->
@@ -373,7 +403,7 @@ class CognitoServiceTest {
 
     @Test
     void deleteUserPoolCascadesGroups() {
-        UserPool pool = service.createUserPool("TestPool", "us-east-1");
+        UserPool pool = service.createUserPool(Map.of("PoolName", "TestPool"), "us-east-1");
         service.createGroup(pool.getId(), "admins", "Admin group", 1, null);
         service.createGroup(pool.getId(), "editors", "Editor group", 2, null);
 
