@@ -37,6 +37,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Arrays;
+import java.util.Optional;
 import java.util.Set;
 
 import org.jboss.logging.Logger;
@@ -535,6 +537,78 @@ public class S3Controller {
         } catch (AwsException e) {
             return xmlErrorResponse(e);
         }
+    }
+
+    // --- CORS preflight ---
+
+    @OPTIONS
+    @Path("/{bucket}")
+    public Response handleOptionsBucket(@PathParam("bucket") String bucket,
+                                         @HeaderParam("Origin") String origin,
+                                         @HeaderParam("Access-Control-Request-Method") String requestMethod,
+                                         @HeaderParam("Access-Control-Request-Headers") String requestHeadersStr) {
+        return handleCorsPreFlight(bucket, origin, requestMethod, requestHeadersStr);
+    }
+
+    @OPTIONS
+    @Path("/{bucket}/{key:.+}")
+    public Response handleOptionsObject(@PathParam("bucket") String bucket,
+                                         @PathParam("key") String key,
+                                         @HeaderParam("Origin") String origin,
+                                         @HeaderParam("Access-Control-Request-Method") String requestMethod,
+                                         @HeaderParam("Access-Control-Request-Headers") String requestHeadersStr) {
+        return handleCorsPreFlight(bucket, origin, requestMethod, requestHeadersStr);
+    }
+
+    private Response handleCorsPreFlight(String bucket, String origin,
+                                          String requestMethod, String requestHeadersStr) {
+        if (origin == null || origin.isBlank()
+                || requestMethod == null || requestMethod.isBlank()) {
+            // Not a valid CORS preflight — return a plain 200 with no CORS headers
+            return Response.ok().build();
+        }
+        List<String> requestHeaders = (requestHeadersStr != null && !requestHeadersStr.isBlank())
+                ? Arrays.stream(requestHeadersStr.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(java.util.stream.Collectors.toList())
+                : List.of();
+
+        Optional<S3Service.CorsEvalResult> evalResult =
+                s3Service.evaluateCors(bucket, origin, requestMethod, requestHeaders);
+
+        if (evalResult.isEmpty()) {
+            String body = new XmlBuilder()
+                    .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                    .start("Error")
+                    .elem("Code", "CORSResponse")
+                    .elem("Message", "This CORS request is not allowed.")
+                    .end("Error")
+                    .build();
+            return Response.status(403)
+                    .entity(body)
+                    .type(MediaType.APPLICATION_XML)
+                    .build();
+        }
+
+        S3Service.CorsEvalResult cors = evalResult.get();
+        var builder = Response.ok()
+                .header("Access-Control-Allow-Origin", cors.allowedOrigin())
+                .header("Access-Control-Allow-Methods", String.join(", ", cors.allowedMethods()));
+
+        if (cors.maxAgeSeconds() > 0) {
+            builder.header("Access-Control-Max-Age", cors.maxAgeSeconds());
+        }
+        if (!cors.allowedHeaders().isEmpty()) {
+            String hdrs = cors.allowedHeaders().contains("*")
+                    ? "*"
+                    : String.join(", ", cors.allowedHeaders());
+            builder.header("Access-Control-Allow-Headers", hdrs);
+        }
+        if (!cors.exposeHeaders().isEmpty()) {
+            builder.header("Access-Control-Expose-Headers", String.join(", ", cors.exposeHeaders()));
+        }
+        return builder.build();
     }
 
     @DELETE
