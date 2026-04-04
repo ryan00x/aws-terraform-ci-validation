@@ -52,7 +52,7 @@
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**25 services. 408/408 SDK tests passing. Free forever.**
+**25 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -198,18 +198,19 @@ const client = new S3Client({
 
 This companion project provides a dedicated compatibility test suite for Floci across multiple SDKs and tooling scenarios, and is the recommended starting point when verifying integration behavior end to end.
 
-Available SDK test modules:
+Available compatibility test modules:
 
-| Module | Language / Tool | SDK / Client |
-|---|---|---|
-| `sdk-test-java` | Java 17 | AWS SDK for Java v2 |
-| `sdk-test-go` | Go | AWS SDK for Go v2 |
-| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 |
-| `sdk-test-python` | Python 3 | boto3 |
-| `sdk-test-rust` | Rust | AWS SDK for Rust |
-| `sdk-test-awscli` | Bash | AWS CLI v2 |
-
-The repository also includes compatibility validation for infrastructure tooling through `compat-cdk` (AWS CDK v2) and `compat-opentofu` (OpenTofu / Terraform-compatible workflows).
+| Module | Language / Tool | SDK / Client / Version | Tests |
+|---|---|---|---:|
+| `sdk-test-java` | Java 17 | AWS SDK for Java v2 | 889 |
+| `sdk-test-node` | Node.js | AWS SDK for JavaScript v3 | 360 |
+| `sdk-test-python` | Python 3 | boto3 | 264 |
+| `sdk-test-go` | Go | AWS SDK for Go v2 | 120 |
+| `sdk-test-awscli` | Bash | AWS CLI v2 | 138 |
+| `sdk-test-rust` | Rust | AWS SDK for Rust | 69 |
+| `compat-terraform` | Terraform | v1.10+ | 14 |
+| `compat-opentofu` | OpenTofu | v1.9+ | 14 |
+| `compat-cdk` | AWS CDK | v2+ | 5 |
 
 ## Image Tags
 
