@@ -50,9 +50,10 @@
 | STS (all 7 operations) | ✅ | ⚠️ Partial |
 | Kinesis (streams, shards, fan-out) | ✅ | ⚠️ Partial |
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
+| ECS (clusters, services, tasks) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**25 services. 1,873 automated compatibility tests. Free forever.**
+**26 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -72,7 +73,7 @@ flowchart LR
         end
 
         subgraph Containers ["Container Services  🐳"]
-            C["Lambda\nElastiCache\nRDS"]
+            C["Lambda\nElastiCache\nRDS\nECS"]
         end
 
         Router --> Stateless
@@ -112,11 +113,12 @@ flowchart LR
 | **CloudWatch Metrics** | 5 | In-process | Custom metrics, statistics, alarms |
 | **ElastiCache** | 9 | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
 | **RDS** | 14 | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
+| **ECS** | 58 | **Real Docker containers** | Clusters, task definitions, tasks, services, capacity providers, task sets |
 | **ACM** | 8 | In-process | Certificate issuance, validation lifecycle |
 | **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
 | **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
 
-> **Lambda, ElastiCache, and RDS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
+> **Lambda, ElastiCache, RDS, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
 
 ## Quick Start
 
