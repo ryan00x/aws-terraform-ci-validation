@@ -51,9 +51,10 @@
 | Kinesis (streams, shards, fan-out) | ✅ | ⚠️ Partial |
 | KMS (sign, verify, re-encrypt) | ✅ | ⚠️ Partial |
 | ECS (clusters, services, tasks) | ✅ | ❌ |
+| EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**26 services. 1,873 automated compatibility tests. Free forever.**
+**27 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -65,7 +66,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · CloudWatch\nStep Functions · CloudFormation\nACM · API Gateway"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · CloudWatch\nStep Functions · CloudFormation\nACM · API Gateway · EC2"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -114,6 +115,7 @@ flowchart LR
 | **ElastiCache** | 9 | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
 | **RDS** | 14 | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
 | **ECS** | 58 | **Real Docker containers** | Clusters, task definitions, tasks, services, capacity providers, task sets |
+| **EC2** | 61 | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
 | **ACM** | 8 | In-process | Certificate issuance, validation lifecycle |
 | **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
 | **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
