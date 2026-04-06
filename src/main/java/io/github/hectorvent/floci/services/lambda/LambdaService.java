@@ -649,6 +649,100 @@ public class LambdaService {
         extractZipCode(fn, Base64.getEncoder().encodeToString(obj.getData()));
     }
 
+    // ──────────────────────────── Permissions (Policy) ────────────────────────────
+
+    public Map<String, Object> addPermission(String region, String functionName, Map<String, Object> request) {
+        LambdaFunction fn = getFunction(region, functionName);
+        String statementId = (String) request.get("StatementId");
+        if (statementId == null || statementId.isBlank()) {
+            throw new AwsException("InvalidParameterValueException", "StatementId is required", 400);
+        }
+        fn.getPolicies().stream()
+                .filter(s -> statementId.equals(s.get("Sid")))
+                .findFirst()
+                .ifPresent(s -> {
+                    throw new AwsException("ResourceConflictException",
+                            "The statement id (" + statementId + ") already exists. Please try again with a new Statement Id.", 409);
+                });
+
+        String principal = (String) request.get("Principal");
+        String action = (String) request.get("Action");
+        String sourceArn = (String) request.get("SourceArn");
+        String sourceAccount = (String) request.get("SourceAccount");
+
+        Map<String, Object> statement = new java.util.LinkedHashMap<>();
+        statement.put("Sid", statementId);
+        statement.put("Effect", "Allow");
+        if (principal != null && principal.contains(".")) {
+            statement.put("Principal", Map.of("Service", principal));
+        } else if (principal != null && principal.startsWith("arn:")) {
+            statement.put("Principal", Map.of("AWS", principal));
+        } else {
+            statement.put("Principal", principal);
+        }
+        statement.put("Action", action);
+        statement.put("Resource", fn.getFunctionArn());
+        if (sourceArn != null) {
+            statement.put("Condition", Map.of("ArnLike", Map.of("AWS:SourceArn", sourceArn)));
+        } else if (sourceAccount != null) {
+            statement.put("Condition", Map.of("StringEquals", Map.of("AWS:SourceAccount", sourceAccount)));
+        }
+
+        fn.getPolicies().add(statement);
+        functionStore.save(region, fn);
+        LOG.infov("Added permission {0} to function {1}", statementId, functionName);
+        return statement;
+    }
+
+    public Map<String, Object> getPolicy(String region, String functionName) {
+        LambdaFunction fn = getFunction(region, functionName);
+        if (fn.getPolicies().isEmpty()) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Function not found: " + functionName, 404);
+        }
+        Map<String, Object> policy = new java.util.LinkedHashMap<>();
+        policy.put("Version", "2012-10-17");
+        policy.put("Id", "default");
+        policy.put("Statement", fn.getPolicies());
+        return Map.of("policy", policy, "revisionId", fn.getRevisionId());
+    }
+
+    public void removePermission(String region, String functionName, String statementId) {
+        LambdaFunction fn = getFunction(region, functionName);
+        boolean removed = fn.getPolicies().removeIf(s -> statementId.equals(s.get("Sid")));
+        if (!removed) {
+            throw new AwsException("ResourceNotFoundException",
+                    "Statement " + statementId + " not found in function " + functionName, 404);
+        }
+        functionStore.save(region, fn);
+        LOG.infov("Removed permission {0} from function {1}", statementId, functionName);
+    }
+
+    // ──────────────────────────── Tags ────────────────────────────
+
+    public Map<String, String> listTags(String functionArn) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        return fn.getTags() != null ? fn.getTags() : Map.of();
+    }
+
+    public void tagResource(String functionArn, Map<String, String> tags) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        if (fn.getTags() == null) fn.setTags(new java.util.HashMap<>());
+        fn.getTags().putAll(tags);
+        functionStore.save(parts[3], fn);
+    }
+
+    public void untagResource(String functionArn, List<String> tagKeys) {
+        String[] parts = functionArn.split(":");
+        LambdaFunction fn = getFunction(parts[3], parts[6]);
+        if (fn.getTags() != null) {
+            tagKeys.forEach(fn.getTags()::remove);
+        }
+        functionStore.save(parts[3], fn);
+    }
+
     private int toInt(Object value, int defaultValue) {
         if (value == null) return defaultValue;
         if (value instanceof Number n) return n.intValue();

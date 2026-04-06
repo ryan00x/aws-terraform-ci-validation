@@ -277,39 +277,22 @@ class EventBridgeSchedulerIntegrationTest {
         return new EmulatorConfig() {
             @Override
             public String baseUrl() { return "http://localhost:4566"; }
-
             @Override
-            public Optional<String> hostname() {
-                return Optional.empty();
-            }
-
+            public Optional<String> hostname() { return Optional.empty(); }
             @Override
             public String defaultRegion() { return REGION; }
             @Override
             public String defaultAccountId() { return ACCOUNT; }
-
             @Override
-            public int maxRequestSize() {
-                return 0;
-            }
-
+            public int maxRequestSize() { return 512; }
             @Override
-            public String ecrBaseUri() {
-                return "";
-            }
-
+            public String ecrBaseUri() { return ""; }
             @Override
             public StorageConfig storage() { return null; }
             @Override
             public AuthConfig auth() { return null; }
             @Override
             public ServicesConfig services() { return null; }
-            @Override
-            public String ecrBaseUri() { return ""; }
-            @Override
-            public int maxRequestSize() { return 512; }
-            @Override
-            public java.util.Optional<String> hostname() { return java.util.Optional.empty(); }
             @Override
             public EmulatorConfig.InitHooksConfig initHooks() { return null; }
         };
