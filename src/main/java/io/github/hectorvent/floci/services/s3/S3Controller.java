@@ -995,6 +995,8 @@ public class S3Controller {
                         new TopicNotification(parsed.id, parsed.arn, parsed.events, parsed.filterRules));
             }
 
+            config.setEventBridgeEnabled(xml.contains("<EventBridgeConfiguration"));
+
             s3Service.putBucketNotificationConfiguration(bucket, config);
             return Response.ok().build();
         } catch (AwsException e) {
