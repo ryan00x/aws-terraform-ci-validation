@@ -282,6 +282,8 @@ class EventBridgeSchedulerIntegrationTest {
             @Override
             public String defaultRegion() { return REGION; }
             @Override
+            public String defaultAvailabilityZone() { return REGION + "a"; }
+            @Override
             public String defaultAccountId() { return ACCOUNT; }
             @Override
             public int maxRequestSize() { return 512; }
