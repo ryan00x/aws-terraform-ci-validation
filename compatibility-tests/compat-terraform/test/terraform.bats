@@ -96,6 +96,13 @@ setup() {
     assert_output --partial "floci-compat"
 }
 
+@test "Terraform: RDS DB instance created and available" {
+    run aws_cmd rds describe-db-instances --db-instance-identifier floci-compat-db
+    assert_success
+    assert_output --partial "floci-compat-db"
+    assert_output --partial "available"
+}
+
 @test "Terraform: CloudWatch alarm created with tags" {
     run aws_cmd cloudwatch describe-alarms --alarm-names floci-compat-cpu-alarm
     assert_success

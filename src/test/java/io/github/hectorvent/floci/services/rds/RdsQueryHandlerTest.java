@@ -1,0 +1,158 @@
+package io.github.hectorvent.floci.services.rds;
+
+import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.github.hectorvent.floci.services.rds.model.DbCluster;
+import io.github.hectorvent.floci.services.rds.model.DbInstance;
+import io.github.hectorvent.floci.services.rds.model.DbInstanceStatus;
+import io.github.hectorvent.floci.services.rds.model.DbParameterGroup;
+import jakarta.ws.rs.core.MultivaluedHashMap;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+/**
+ * Verifies the XML format and Filters parsing in RdsQueryHandler.
+ */
+class RdsQueryHandlerTest {
+
+    private RdsService service;
+    private RdsQueryHandler handler;
+
+    @BeforeEach
+    void setUp() {
+        service = mock(RdsService.class);
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig servicesConfig = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.RdsServiceConfig rdsConfig = mock(EmulatorConfig.RdsServiceConfig.class);
+        when(config.services()).thenReturn(servicesConfig);
+        when(servicesConfig.rds()).thenReturn(rdsConfig);
+        when(config.defaultAvailabilityZone()).thenReturn("us-east-1a");
+        handler = new RdsQueryHandler(service, config);
+    }
+
+    // ──────────────────────────── DBInstances XML tag ────────────────────────────
+
+    @Test
+    void describeDbInstances_usesDBInstanceTag() {
+        DbInstance instance = makeInstance("mydb");
+        when(service.listDbInstances(null)).thenReturn(List.of(instance));
+
+        Response response = handler.handle("DescribeDBInstances", params());
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBInstance>"), "Expected <DBInstance> element in response");
+        assertFalse(body.contains("<member><DBInstanceIdentifier>"), "Did not expect <member> wrapping DBInstance");
+    }
+
+    @Test
+    void describeDbInstances_filterByDirectIdentifier() {
+        DbInstance instance = makeInstance("mydb");
+        when(service.listDbInstances("mydb")).thenReturn(List.of(instance));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "mydb");
+        handler.handle("DescribeDBInstances", p);
+
+        verify(service).listDbInstances("mydb");
+    }
+
+    @Test
+    void describeDbInstances_filterByFiltersParam() {
+        DbInstance instance = makeInstance("mydb");
+        when(service.listDbInstances("mydb")).thenReturn(List.of(instance));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("Filters.Filter.1.Name", "db-instance-id");
+        p.add("Filters.Filter.1.Values.Value.1", "mydb");
+        handler.handle("DescribeDBInstances", p);
+
+        verify(service).listDbInstances("mydb");
+    }
+
+    @Test
+    void describeDbInstances_directIdentifierTakesPriorityOverFilters() {
+        when(service.listDbInstances(any())).thenReturn(List.of());
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "direct-id");
+        p.add("Filters.Filter.1.Name", "db-instance-id");
+        p.add("Filters.Filter.1.Values.Value.1", "filter-id");
+        handler.handle("DescribeDBInstances", p);
+
+        verify(service).listDbInstances("direct-id");
+    }
+
+    // ──────────────────────────── DBClusters XML tag ────────────────────────────
+
+    @Test
+    void describeDbClusters_usesDBClusterTag() {
+        DbCluster cluster = makeCluster("mycluster");
+        when(service.listDbClusters(null)).thenReturn(List.of(cluster));
+
+        Response response = handler.handle("DescribeDBClusters", params());
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBCluster>"), "Expected <DBCluster> element in response");
+        assertFalse(body.contains("<member><DBClusterIdentifier>"), "Did not expect <member> wrapping DBCluster");
+    }
+
+    @Test
+    void describeDbClusters_filterByFiltersParam() {
+        when(service.listDbClusters("mycluster")).thenReturn(List.of());
+
+        MultivaluedMap<String, String> p = params();
+        p.add("Filters.Filter.1.Name", "db-cluster-id");
+        p.add("Filters.Filter.1.Values.Value.1", "mycluster");
+        handler.handle("DescribeDBClusters", p);
+
+        verify(service).listDbClusters("mycluster");
+    }
+
+    // ──────────────────────────── DBParameterGroups XML tag ──────────────────────
+
+    @Test
+    void describeDbParameterGroups_usesDBParameterGroupTag() {
+        DbParameterGroup group = new DbParameterGroup("pg1", "postgres15", "test group");
+        when(service.listDbParameterGroups(null)).thenReturn(List.of(group));
+
+        Response response = handler.handle("DescribeDBParameterGroups", params());
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<DBParameterGroup>"), "Expected <DBParameterGroup> element in response");
+        assertFalse(body.contains("<member><DBParameterGroupName>"), "Did not expect <member> wrapping DBParameterGroup");
+    }
+
+    // ──────────────────────────── Helpers ────────────────────────────
+
+    private static MultivaluedMap<String, String> params() {
+        return new MultivaluedHashMap<>();
+    }
+
+    private static DbInstance makeInstance(String id) {
+        DbInstance i = new DbInstance();
+        i.setDbInstanceIdentifier(id);
+        i.setStatus(DbInstanceStatus.AVAILABLE);
+        i.setEngine(io.github.hectorvent.floci.services.rds.model.DatabaseEngine.POSTGRES);
+        i.setEngineVersion("15");
+        i.setMasterUsername("admin");
+        i.setDbInstanceClass("db.t3.micro");
+        i.setAllocatedStorage(20);
+        return i;
+    }
+
+    private static DbCluster makeCluster(String id) {
+        DbCluster c = new DbCluster();
+        c.setDbClusterIdentifier(id);
+        c.setStatus(DbInstanceStatus.AVAILABLE);
+        c.setEngine(io.github.hectorvent.floci.services.rds.model.DatabaseEngine.POSTGRES);
+        c.setEngineVersion("15");
+        c.setMasterUsername("admin");
+        return c;
+    }
+}

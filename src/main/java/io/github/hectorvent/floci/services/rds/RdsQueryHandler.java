@@ -107,11 +107,14 @@ public class RdsQueryHandler {
 
     private Response handleDescribeDbInstances(MultivaluedMap<String, String> params) {
         String filterId = params.getFirst("DBInstanceIdentifier");
+        if (filterId == null || filterId.isBlank()) {
+            filterId = extractRdsFilterValue(params, "db-instance-id");
+        }
         try {
             Collection<DbInstance> result = service.listDbInstances(filterId);
             XmlBuilder xml = new XmlBuilder().start("DBInstances");
             for (DbInstance i : result) {
-                xml.start("member").raw(dbInstanceInnerXml(i)).end("member");
+                xml.start("DBInstance").raw(dbInstanceInnerXml(i)).end("DBInstance");
             }
             xml.end("DBInstances").start("Marker").end("Marker");
             return Response.ok(AwsQueryResponse.envelope("DescribeDBInstances", AwsNamespaces.RDS, xml.build())).build();
@@ -198,11 +201,14 @@ public class RdsQueryHandler {
 
     private Response handleDescribeDbClusters(MultivaluedMap<String, String> params) {
         String filterId = params.getFirst("DBClusterIdentifier");
+        if (filterId == null || filterId.isBlank()) {
+            filterId = extractRdsFilterValue(params, "db-cluster-id");
+        }
         try {
             Collection<DbCluster> result = service.listDbClusters(filterId);
             XmlBuilder xml = new XmlBuilder().start("DBClusters");
             for (DbCluster c : result) {
-                xml.start("member").raw(dbClusterInnerXml(c)).end("member");
+                xml.start("DBCluster").raw(dbClusterInnerXml(c)).end("DBCluster");
             }
             xml.end("DBClusters").start("Marker").end("Marker");
             return Response.ok(AwsQueryResponse.envelope("DescribeDBClusters", AwsNamespaces.RDS, xml.build())).build();
@@ -267,7 +273,7 @@ public class RdsQueryHandler {
             Collection<DbParameterGroup> result = service.listDbParameterGroups(filterName);
             XmlBuilder xml = new XmlBuilder().start("DBParameterGroups");
             for (DbParameterGroup g : result) {
-                xml.start("member").raw(paramGroupInnerXml(g)).end("member");
+                xml.start("DBParameterGroup").raw(paramGroupInnerXml(g)).end("DBParameterGroup");
             }
             xml.end("DBParameterGroups").start("Marker").end("Marker");
             return Response.ok(AwsQueryResponse.envelope("DescribeDBParameterGroups", AwsNamespaces.RDS, xml.build())).build();
@@ -487,6 +493,24 @@ public class RdsQueryHandler {
             case REBOOTING -> "rebooting";
             case MODIFYING -> "modifying";
         };
+    }
+
+    /**
+     * Extracts the first value for a named filter from RDS Query API encoded params:
+     * {@code Filters.Filter.N.Name=filterName} / {@code Filters.Filter.N.Values.Value.1=value}.
+     * Returns null if no matching filter is present.
+     */
+    private static String extractRdsFilterValue(MultivaluedMap<String, String> params, String filterName) {
+        for (int i = 1; ; i++) {
+            String name = params.getFirst("Filters.Filter." + i + ".Name");
+            if (name == null) {
+                break;
+            }
+            if (filterName.equals(name)) {
+                return params.getFirst("Filters.Filter." + i + ".Values.Value.1");
+            }
+        }
+        return null;
     }
 
     private static int parseIntSafe(String value, int defaultValue) {

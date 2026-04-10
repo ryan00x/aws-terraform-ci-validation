@@ -113,6 +113,18 @@ resource "aws_secretsmanager_secret_version" "db_creds" {
   })
 }
 
+# -- RDS DB Instance -----------------------------------------------------------
+resource "aws_db_instance" "app" {
+  identifier        = "floci-compat-db"
+  engine            = "postgres"
+  engine_version    = "15"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
+  username          = "admin"
+  password          = "Password1!"
+  skip_final_snapshot = true
+}
+
 # -- Outputs -------------------------------------------------------------------
 output "bucket_id" {
   value = aws_s3_bucket.app.id
