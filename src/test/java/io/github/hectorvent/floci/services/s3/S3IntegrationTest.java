@@ -898,6 +898,98 @@ class S3IntegrationTest {
         given().delete("/encoding-test-bucket");
     }
 
+    // --- Cache-Control header preservation ---
+
+    @Test
+    @Order(89)
+    void createCacheControlBucketAndPutObject() {
+        given()
+            .put("/cache-control-bucket")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("text/plain")
+            .header("Cache-Control", "public, max-age=31536000")
+            .body("cached-content")
+        .when()
+            .put("/cache-control-bucket/cached.txt")
+        .then()
+            .statusCode(200)
+            .header("ETag", notNullValue());
+    }
+
+    @Test
+    @Order(90)
+    void getObjectReturnsCacheControl() {
+        given()
+        .when()
+            .get("/cache-control-bucket/cached.txt")
+        .then()
+            .statusCode(200)
+            .header("Cache-Control", equalTo("public, max-age=31536000"));
+    }
+
+    @Test
+    @Order(90)
+    void headObjectReturnsCacheControl() {
+        given()
+        .when()
+            .head("/cache-control-bucket/cached.txt")
+        .then()
+            .statusCode(200)
+            .header("Cache-Control", equalTo("public, max-age=31536000"));
+    }
+
+    @Test
+    @Order(91)
+    void copyObjectPreservesCacheControl() {
+        given()
+            .header("x-amz-copy-source", "/cache-control-bucket/cached.txt")
+        .when()
+            .put("/cache-control-bucket/cached-copy.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/cache-control-bucket/cached-copy.txt")
+        .then()
+            .statusCode(200)
+            .header("Cache-Control", equalTo("public, max-age=31536000"));
+    }
+
+    @Test
+    @Order(91)
+    void copyObjectReplaceCacheControl() {
+        given()
+            .header("x-amz-copy-source", "/cache-control-bucket/cached.txt")
+            .header("x-amz-metadata-directive", "REPLACE")
+            .header("Cache-Control", "no-cache")
+        .when()
+            .put("/cache-control-bucket/cached-nocache.txt")
+        .then()
+            .statusCode(200)
+            .body(containsString("CopyObjectResult"));
+
+        given()
+        .when()
+            .head("/cache-control-bucket/cached-nocache.txt")
+        .then()
+            .statusCode(200)
+            .header("Cache-Control", equalTo("no-cache"));
+    }
+
+    @Test
+    @Order(92)
+    void cleanupCacheControlBucket() {
+        given().delete("/cache-control-bucket/cached.txt");
+        given().delete("/cache-control-bucket/cached-copy.txt");
+        given().delete("/cache-control-bucket/cached-nocache.txt");
+        given().delete("/cache-control-bucket");
+    }
+
     // --- S3 Notification Configuration with Filter ---
 
     @Test
