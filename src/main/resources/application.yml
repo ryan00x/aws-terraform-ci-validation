@@ -133,3 +133,7 @@ floci:
     ecs:
       enabled: true
       mock: false
+    appconfig:
+      enabled: true
+    appconfigdata:
+      enabled: true

@@ -79,6 +79,8 @@ public interface EmulatorConfig {
         SecretsManagerStorageConfig secretsmanager();
         AcmStorageConfig acm();
         OpenSearchStorageConfig opensearch();
+        AppConfigStorageConfig appconfig();
+        AppConfigDataStorageConfig appconfigdata();
     }
 
     interface SsmStorageConfig {
@@ -152,6 +154,20 @@ public interface EmulatorConfig {
         long flushIntervalMs();
     }
 
+    interface AppConfigStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface AppConfigDataStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
     interface WalConfig {
         @WithDefault("30000")
         long compactionIntervalMs();
@@ -196,6 +212,8 @@ public interface EmulatorConfig {
         OpenSearchServiceConfig opensearch();
         Ec2ServiceConfig ec2();
         EcsServiceConfig ecs();
+        AppConfigServiceConfig appconfig();
+        AppConfigDataServiceConfig appconfigdata();
     }
 
     interface SsmServiceConfig {
@@ -434,6 +452,16 @@ public interface EmulatorConfig {
     }
 
     interface Ec2ServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface AppConfigServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface AppConfigDataServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }

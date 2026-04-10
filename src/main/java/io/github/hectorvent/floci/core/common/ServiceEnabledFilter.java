@@ -3,6 +3,8 @@ package io.github.hectorvent.floci.core.common;
 import io.github.hectorvent.floci.services.cognito.CognitoOAuthController;
 import io.github.hectorvent.floci.services.cognito.CognitoWellKnownController;
 import io.github.hectorvent.floci.services.ses.SesController;
+import io.github.hectorvent.floci.services.appconfig.AppConfigController;
+import io.github.hectorvent.floci.services.appconfig.AppConfigDataController;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
@@ -95,6 +97,12 @@ public class ServiceEnabledFilter implements ContainerRequestFilter {
         }
         if (SesController.class.equals(resourceClass)) {
             return "email";
+        }
+        if (AppConfigController.class.equals(resourceClass)) {
+            return "appconfig";
+        }
+        if (AppConfigDataController.class.equals(resourceClass)) {
+            return "appconfigdata";
         }
         return null;
     }

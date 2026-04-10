@@ -54,7 +54,7 @@
 | EC2 (VPCs, instances, security groups) | ✅ | ⚠️ Partial |
 | Native binary | ✅ ~40 MB | ❌ |
 
-**28 services. 1,873 automated compatibility tests. Free forever.**
+**31 services. 1,873 automated compatibility tests. Free forever.**
 
 ## Architecture Overview
 
@@ -66,7 +66,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · Scheduler\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · EC2"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis · OpenSearch\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · EC2"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -121,6 +121,8 @@ flowchart LR
 | **SES** | 14 | In-process | Send email / raw email, identity verification, DKIM attributes |
 | **SES v2 (HTTP)** | 9 | In-process | REST JSON API, identities, DKIM, feedback attributes, account sending |
 | **OpenSearch** | 24 | In-process | Domain CRUD, tags, versions, instance types, upgrade stubs |
+| **AppConfig** | 16 | In-process | Applications, environments, profiles, hosted configuration versions, deployments |
+| **AppConfigData** | 2 | In-process | Configuration sessions, dynamic configuration retrieval |
 
 > **Lambda, ElastiCache, RDS, and ECS** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS.
 

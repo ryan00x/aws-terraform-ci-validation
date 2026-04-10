@@ -53,6 +53,8 @@ public class ServiceRegistry {
             case "es" -> config.services().opensearch().enabled();
             case "ec2" -> config.services().ec2().enabled();
             case "ecs" -> config.services().ecs().enabled();
+            case "appconfig" -> config.services().appconfig().enabled();
+            case "appconfigdata" -> config.services().appconfigdata().enabled();
             default -> true;
         };
     }
@@ -83,6 +85,8 @@ public class ServiceRegistry {
         if (config.services().acm().enabled()) enabled.add("acm");
         if (config.services().ses().enabled()) enabled.add("email");
         if (config.services().opensearch().enabled()) enabled.add("es");
+        if (config.services().appconfig().enabled()) enabled.add("appconfig");
+        if (config.services().appconfigdata().enabled()) enabled.add("appconfigdata");
         return enabled;
     }
 
@@ -117,6 +121,8 @@ public class ServiceRegistry {
         services.put("es", status(config.services().opensearch().enabled()));
         services.put("ec2", status(config.services().ec2().enabled()));
         services.put("ecs", status(config.services().ecs().enabled()));
+        services.put("appconfig", status(config.services().appconfig().enabled()));
+        services.put("appconfigdata", status(config.services().appconfigdata().enabled()));
         return services;
     }
 

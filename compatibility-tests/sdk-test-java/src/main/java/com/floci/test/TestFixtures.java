@@ -30,6 +30,8 @@ import software.amazon.awssdk.services.acm.AcmClient;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
+import software.amazon.awssdk.services.appconfig.AppConfigClient;
+import software.amazon.awssdk.services.appconfigdata.AppConfigDataClient;
 
 import java.net.URI;
 import java.util.UUID;
@@ -306,6 +308,22 @@ public final class TestFixtures {
 
     public static SchedulerClient schedulerClient() {
         return SchedulerClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static AppConfigClient appConfigClient() {
+        return AppConfigClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static AppConfigDataClient appConfigDataClient() {
+        return AppConfigDataClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)
