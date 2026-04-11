@@ -1577,6 +1577,183 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_dependencyOrdering_refBeforeTarget() {
+        String template = """
+            {
+              "Resources": {
+                "ParamForQueue": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "/dep-order/ref-queue-name",
+                    "Type": "String",
+                    "Value": {"Ref": "DepOrderQueue"}
+                  }
+                },
+                "DepOrderQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "dep-order-ref-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "dep-order-ref-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "dep-order-ref-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "/dep-order/ref-queue-name", "WithDecryption": true}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", containsString("dep-order-ref-queue"));
+    }
+
+    @Test
+    void createStack_dependencyOrdering_getAttBeforeTarget() {
+        String template = """
+            {
+              "Resources": {
+                "ArnParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "/dep-order/getatt-table-arn",
+                    "Type": "String",
+                    "Value": {"Fn::GetAtt": ["DepOrderTable", "Arn"]}
+                  }
+                },
+                "DepOrderTable": {
+                  "Type": "AWS::DynamoDB::Table",
+                  "Properties": {
+                    "TableName": "dep-order-getatt-table",
+                    "AttributeDefinitions": [
+                      {"AttributeName": "pk", "AttributeType": "S"}
+                    ],
+                    "KeySchema": [
+                      {"AttributeName": "pk", "KeyType": "HASH"}
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "dep-order-getatt-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "dep-order-getatt-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "/dep-order/getatt-table-arn", "WithDecryption": true}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", startsWith("arn:aws:dynamodb:"));
+    }
+
+    @Test
+    void createStack_dependencyOrdering_fnSubBeforeTarget() {
+        String template = """
+            {
+              "Resources": {
+                "SubParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "/dep-order/sub-queue-arn",
+                    "Type": "String",
+                    "Value": {"Fn::Sub": "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${DepSubQueue}"}
+                  }
+                },
+                "DepSubQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "dep-order-sub-queue"
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "dep-order-sub-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", "dep-order-sub-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "/dep-order/sub-queue-arn", "WithDecryption": true}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", containsString("dep-order-sub-queue"));
+    }
+
+    @Test
     void deleteStack_withEventBridgeRule() {
         String template = """
             {

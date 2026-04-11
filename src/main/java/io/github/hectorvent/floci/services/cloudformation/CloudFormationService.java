@@ -15,6 +15,8 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -219,11 +221,10 @@ public class CloudFormationService {
             }
 
             if (resources.isObject()) {
-                Iterator<Map.Entry<String, JsonNode>> it = resources.fields();
-                while (it.hasNext()) {
-                    var entry = it.next();
-                    String logicalId = entry.getKey();
-                    JsonNode resDef = entry.getValue();
+                List<String> sortedLogicalIds = topologicalSort(resources, conditions);
+
+                for (String logicalId : sortedLogicalIds) {
+                    JsonNode resDef = resources.get(logicalId);
                     String type = resDef.path("Type").asText();
                     JsonNode props = resDef.path("Properties");
 
@@ -480,6 +481,146 @@ public class CloudFormationService {
                     "Stack with id " + stackName + " does not exist", 400);
         }
         return stack;
+    }
+
+    private List<String> topologicalSort(JsonNode resources, Map<String, Boolean> conditions) {
+        Set<String> allIds = new LinkedHashSet<>();
+        resources.fieldNames().forEachRemaining(allIds::add);
+
+        Map<String, Set<String>> dependencies = new HashMap<>();
+        for (String logicalId : allIds) {
+            JsonNode resDef = resources.get(logicalId);
+
+            String condition = resDef.path("Condition").asText(null);
+            if (condition != null && !conditions.getOrDefault(condition, false)) {
+                continue;
+            }
+
+            Set<String> deps = new LinkedHashSet<>();
+            collectDependencies(resDef.path("Properties"), allIds, deps);
+
+            JsonNode dependsOn = resDef.path("DependsOn");
+            if (dependsOn.isTextual()) {
+                deps.add(dependsOn.asText());
+            } else if (dependsOn.isArray()) {
+                for (JsonNode d : dependsOn) {
+                    deps.add(d.asText());
+                }
+            }
+
+            dependencies.put(logicalId, deps);
+        }
+
+        Map<String, Integer> inDegree = new HashMap<>();
+        for (String id : allIds) {
+            inDegree.put(id, 0);
+        }
+        for (var entry : dependencies.entrySet()) {
+            for (String dep : entry.getValue()) {
+                if (inDegree.containsKey(dep)) {
+                    inDegree.put(entry.getKey(), inDegree.get(entry.getKey()) + 1);
+                }
+            }
+        }
+
+        Deque<String> queue = new ArrayDeque<>();
+        for (String id : allIds) {
+            if (inDegree.get(id) == 0) {
+                queue.add(id);
+            }
+        }
+
+        List<String> sorted = new ArrayList<>();
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            sorted.add(current);
+            for (var entry : dependencies.entrySet()) {
+                if (entry.getValue().contains(current)) {
+                    int newDegree = inDegree.get(entry.getKey()) - 1;
+                    inDegree.put(entry.getKey(), newDegree);
+                    if (newDegree == 0) {
+                        queue.add(entry.getKey());
+                    }
+                }
+            }
+        }
+
+        for (String id : allIds) {
+            if (!sorted.contains(id)) {
+                sorted.add(id);
+            }
+        }
+
+        return sorted;
+    }
+
+    private static final Pattern SUB_VAR_PATTERN = Pattern.compile("\\$\\{([^}]+)}");
+
+    private void collectDependencies(JsonNode node, Set<String> allIds, Set<String> deps) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return;
+        }
+        if (node.isObject()) {
+            if (node.has("Ref")) {
+                String ref = node.get("Ref").asText();
+                if (allIds.contains(ref)) {
+                    deps.add(ref);
+                }
+                return;
+            }
+            if (node.has("Fn::GetAtt")) {
+                JsonNode getAtt = node.get("Fn::GetAtt");
+                String logicalId;
+                if (getAtt.isArray() && getAtt.size() >= 1) {
+                    logicalId = getAtt.get(0).asText();
+                } else {
+                    logicalId = getAtt.asText().split("\\.", 2)[0];
+                }
+                if (allIds.contains(logicalId)) {
+                    deps.add(logicalId);
+                }
+                return;
+            }
+            if (node.has("Fn::Sub")) {
+                collectSubDependencies(node.get("Fn::Sub"), allIds, deps);
+                return;
+            }
+            node.fields().forEachRemaining(e -> collectDependencies(e.getValue(), allIds, deps));
+        } else if (node.isArray()) {
+            for (JsonNode item : node) {
+                collectDependencies(item, allIds, deps);
+            }
+        }
+    }
+
+    private void collectSubDependencies(JsonNode sub, Set<String> allIds, Set<String> deps) {
+        String template;
+        Set<String> explicitVars = new HashSet<>();
+
+        if (sub.isTextual()) {
+            template = sub.textValue();
+        } else if (sub.isArray() && sub.size() >= 1) {
+            template = sub.get(0).asText();
+            if (sub.size() >= 2 && sub.get(1).isObject()) {
+                sub.get(1).fieldNames().forEachRemaining(explicitVars::add);
+                collectDependencies(sub.get(1), allIds, deps);
+            }
+        } else {
+            return;
+        }
+
+        Matcher matcher = SUB_VAR_PATTERN.matcher(template);
+        while (matcher.find()) {
+            String varName = matcher.group(1);
+            if (varName.startsWith("AWS::") || explicitVars.contains(varName)) {
+                continue;
+            }
+            int dot = varName.indexOf('.');
+            String resourcePart = dot > 0 ? varName.substring(0, dot) : varName;
+            if (allIds.contains(resourcePart)) {
+                deps.add(resourcePart);
+            }
+        }
     }
 
     private static String key(String stackName, String region) {
