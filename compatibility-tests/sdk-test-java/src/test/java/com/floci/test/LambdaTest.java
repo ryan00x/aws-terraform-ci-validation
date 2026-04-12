@@ -196,8 +196,116 @@ class LambdaTest {
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #339 — AddPermission / GetPolicy / RemovePermission
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static final String PERM_FN = "sdk-test-perm-fn";
+    private static final String STMT_S3  = "AllowS3Invoke";
+    private static final String STMT_SNS = "AllowSnsInvoke";
+
     @Test
     @Order(12)
+    @DisplayName("#339 addPermission: returns 201 with Statement JSON")
+    void addPermissionReturnsStatement() {
+        // Create a dedicated function for permission tests
+        lambda.createFunction(CreateFunctionRequest.builder()
+                .functionName(PERM_FN)
+                .runtime(Runtime.NODEJS20_X)
+                .role(ROLE)
+                .handler("index.handler")
+                .code(FunctionCode.builder()
+                        .zipFile(SdkBytes.fromByteArray(LambdaUtils.minimalZip()))
+                        .build())
+                .build());
+
+        AddPermissionResponse response = lambda.addPermission(AddPermissionRequest.builder()
+                .functionName(PERM_FN)
+                .statementId(STMT_S3)
+                .action("lambda:InvokeFunction")
+                .principal("s3.amazonaws.com")
+                .sourceArn("arn:aws:s3:::my-bucket")
+                .build());
+
+        assertThat(response.statement()).isNotNull().isNotEmpty();
+        assertThat(response.statement()).contains("AllowS3Invoke");
+        assertThat(response.statement()).contains("s3.amazonaws.com");
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("#339 addPermission: duplicate StatementId returns 409")
+    void addPermissionDuplicateStatementIdThrows409() {
+        assertThatThrownBy(() -> lambda.addPermission(AddPermissionRequest.builder()
+                .functionName(PERM_FN)
+                .statementId(STMT_S3)
+                .action("lambda:InvokeFunction")
+                .principal("s3.amazonaws.com")
+                .build()))
+                .isInstanceOf(ResourceConflictException.class);
+    }
+
+    @Test
+    @Order(14)
+    @DisplayName("#339 getPolicy: returns stored policy with all statements")
+    void getPolicyReturnsStoredStatements() {
+        // Add a second statement
+        lambda.addPermission(AddPermissionRequest.builder()
+                .functionName(PERM_FN)
+                .statementId(STMT_SNS)
+                .action("lambda:InvokeFunction")
+                .principal("sns.amazonaws.com")
+                .build());
+
+        GetPolicyResponse response = lambda.getPolicy(GetPolicyRequest.builder()
+                .functionName(PERM_FN)
+                .build());
+
+        assertThat(response.policy()).isNotNull().isNotEmpty();
+        assertThat(response.policy()).contains(STMT_S3);
+        assertThat(response.policy()).contains(STMT_SNS);
+        assertThat(response.revisionId()).isNotNull();
+    }
+
+    @Test
+    @Order(15)
+    @DisplayName("#339 removePermission: returns 204 and statement is gone from policy")
+    void removePermissionRemovesStatement() {
+        lambda.removePermission(RemovePermissionRequest.builder()
+                .functionName(PERM_FN)
+                .statementId(STMT_SNS)
+                .build());
+
+        GetPolicyResponse response = lambda.getPolicy(GetPolicyRequest.builder()
+                .functionName(PERM_FN)
+                .build());
+
+        assertThat(response.policy()).contains(STMT_S3);
+        assertThat(response.policy()).doesNotContain(STMT_SNS);
+    }
+
+    @Test
+    @Order(16)
+    @DisplayName("#339 getPolicy: function with no permissions returns 404")
+    void getPolicyNoPermissionsThrows404() {
+        // Remove remaining statement so policy is empty
+        lambda.removePermission(RemovePermissionRequest.builder()
+                .functionName(PERM_FN)
+                .statementId(STMT_S3)
+                .build());
+
+        assertThatThrownBy(() -> lambda.getPolicy(GetPolicyRequest.builder()
+                .functionName(PERM_FN)
+                .build()))
+                .isInstanceOf(ResourceNotFoundException.class);
+
+        // Cleanup
+        lambda.deleteFunction(DeleteFunctionRequest.builder()
+                .functionName(PERM_FN).build());
+    }
+
+    @Test
+    @Order(17)
     void rubyRuntimeSupport() {
         String rubyFn = "sdk-test-ruby-fn";
 
