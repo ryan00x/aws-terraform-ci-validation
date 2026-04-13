@@ -12,6 +12,7 @@ import io.github.hectorvent.floci.services.iam.model.IamUser;
 import io.github.hectorvent.floci.services.iam.model.InstanceProfile;
 import io.github.hectorvent.floci.services.iam.model.PolicyVersion;
 import com.fasterxml.jackson.core.type.TypeReference;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -67,6 +68,25 @@ public class IamService {
         this.accessKeys = accessKeys;
         this.instanceProfiles = instanceProfiles;
         this.accountId = accountId;
+    }
+
+    @PostConstruct
+    void seedAwsManagedPolicies() {
+        int seeded = 0;
+        for (AwsManagedPolicies.ManagedPolicyDef def : AwsManagedPolicies.POLICIES) {
+            String arn = def.arn();
+            if (policies.get(arn).isPresent()) {
+                continue;
+            }
+            String policyId = "ANPA" + randomId(16);
+            IamPolicy policy = new IamPolicy(policyId, def.name(), def.path(), arn,
+                    def.description(), AwsManagedPolicies.PERMISSIVE_DOCUMENT);
+            policies.put(arn, policy);
+            seeded++;
+        }
+        if (seeded > 0) {
+            LOG.infov("Seeded {0} AWS managed policies", seeded);
+        }
     }
 
     // =========================================================================
@@ -325,7 +345,15 @@ public class IamService {
                         "Policy " + policyArn + " does not exist.", 404));
     }
 
+    private void rejectIfAwsManaged(String policyArn) {
+        if (policyArn != null && policyArn.startsWith(AwsManagedPolicies.ARN_PREFIX)) {
+            throw new AwsException("AccessDenied",
+                    "Cannot modify or delete AWS managed policy: " + policyArn, 403);
+        }
+    }
+
     public void deletePolicy(String policyArn) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         if (policy.getAttachmentCount() > 0) {
             throw new AwsException("DeleteConflict",
@@ -336,13 +364,30 @@ public class IamService {
     }
 
     public List<IamPolicy> listPolicies(String scope, String pathPrefix) {
+        if (scope != null && !scope.isBlank()
+                && !"All".equalsIgnoreCase(scope)
+                && !"AWS".equalsIgnoreCase(scope)
+                && !"Local".equalsIgnoreCase(scope)) {
+            throw new AwsException("ValidationError",
+                    "Value '" + scope + "' at 'scope' failed to satisfy constraint: "
+                            + "Member must satisfy enum value set: [All, AWS, Local]", 400);
+        }
         String prefix = pathPrefix != null ? pathPrefix : "/";
         return policies.scan(k -> true).stream()
                 .filter(p -> p.getPath().startsWith(prefix))
+                .filter(p -> {
+                    if ("AWS".equalsIgnoreCase(scope)) {
+                        return p.getArn().startsWith(AwsManagedPolicies.ARN_PREFIX);
+                    } else if ("Local".equalsIgnoreCase(scope)) {
+                        return !p.getArn().startsWith(AwsManagedPolicies.ARN_PREFIX);
+                    }
+                    return true;
+                })
                 .toList();
     }
 
     public PolicyVersion createPolicyVersion(String policyArn, String document, boolean setAsDefault) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         int nextVersionNum = policy.getVersions().size() + 1;
         if (nextVersionNum > 5) {
@@ -372,6 +417,7 @@ public class IamService {
     }
 
     public void deletePolicyVersion(String policyArn, String versionId) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         if (versionId.equals(policy.getDefaultVersionId())) {
             throw new AwsException("DeleteConflict",
@@ -390,6 +436,7 @@ public class IamService {
     }
 
     public void setDefaultPolicyVersion(String policyArn, String versionId) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         if (!policy.getVersions().containsKey(versionId)) {
             throw new AwsException("NoSuchEntity",
@@ -402,12 +449,14 @@ public class IamService {
     }
 
     public void tagPolicy(String policyArn, Map<String, String> newTags) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         policy.getTags().putAll(newTags);
         policies.put(policyArn, policy);
     }
 
     public void untagPolicy(String policyArn, List<String> tagKeys) {
+        rejectIfAwsManaged(policyArn);
         IamPolicy policy = getPolicy(policyArn);
         tagKeys.forEach(policy.getTags()::remove);
         policies.put(policyArn, policy);
