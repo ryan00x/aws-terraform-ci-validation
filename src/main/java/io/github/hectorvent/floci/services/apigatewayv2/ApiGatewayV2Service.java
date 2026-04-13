@@ -192,7 +192,7 @@ public class ApiGatewayV2Service {
         int last = 0;
         while (m.find()) {
             regex.append(Pattern.quote(pattern.substring(last, m.start())));
-            regex.append(m.group(1).endsWith("+") ? ".+" : "[^/]+");
+            regex.append(m.group(1).endsWith("+") ? ".*" : "[^/]+");
             last = m.end();
         }
         regex.append(Pattern.quote(pattern.substring(last)));
