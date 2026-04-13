@@ -647,11 +647,18 @@ public class LambdaService {
             fn.setCodeLocalPath(codePath.toAbsolutePath().normalize().toString());
             fn.setCodeSizeBytes(zipBytes.length);
 
-            // For non-Java runtimes, verify handler file exists
-            if (fn.getRuntime() != null && !fn.getRuntime().startsWith("java")) {
+            // For file-based runtimes, verify handler file exists (skip Java and .NET which use different handler formats)
+            if (fn.getRuntime() != null && !fn.getRuntime().startsWith("java") && !fn.getRuntime().startsWith("dotnet")) {
                 String handlerFile = fn.getHandler().split("\\.")[0];
                 boolean found = Files.walk(codePath)
-                        .anyMatch(p -> p.getFileName().toString().startsWith(handlerFile));
+                        .filter(Files::isRegularFile)
+                        .anyMatch(p -> {
+                            String relative = codePath.relativize(p).toString();
+                            String withoutExt = relative.contains(".")
+                                    ? relative.substring(0, relative.lastIndexOf('.'))
+                                    : relative;
+                            return withoutExt.equals(handlerFile);
+                        });
                 if (!found) {
                     throw new AwsException("InvalidParameterValueException",
                             "Handler file '" + handlerFile + "' not found in deployment package", 400);

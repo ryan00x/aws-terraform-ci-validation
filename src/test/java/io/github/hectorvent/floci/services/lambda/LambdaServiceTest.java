@@ -9,9 +9,13 @@ import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -157,6 +161,70 @@ class LambdaServiceTest {
         AwsException ex = assertThrows(AwsException.class, () -> service.createFunction(REGION, req));
         assertEquals("InvalidParameterValueException", ex.getErrorCode());
         assertTrue(ex.getMessage().contains("Handler"));
+    }
+
+    private static String createZipBase64(String... entryPaths) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+            for (String path : entryPaths) {
+                zos.putNextEntry(new ZipEntry(path));
+                zos.write("exports.handler = async () => ({});\n".getBytes());
+                zos.closeEntry();
+            }
+        }
+        return Base64.getEncoder().encodeToString(baos.toByteArray());
+    }
+
+    @Test
+    void createFunctionWithSubdirectoryHandler() throws Exception {
+        Map<String, Object> req = new java.util.HashMap<>(Map.of(
+                "FunctionName", "subdir-handler-fn",
+                "Runtime", "nodejs20.x",
+                "Role", "arn:aws:iam::000000000000:role/test-role",
+                "Handler", "src/index.handler",
+                "Code", Map.of("ZipFile", createZipBase64("src/index.js"))
+        ));
+        LambdaFunction fn = service.createFunction(REGION, req);
+        assertEquals("src/index.handler", fn.getHandler());
+    }
+
+    @Test
+    void createFunctionWithRootHandler() throws Exception {
+        Map<String, Object> req = new java.util.HashMap<>(Map.of(
+                "FunctionName", "root-handler-fn",
+                "Runtime", "nodejs20.x",
+                "Role", "arn:aws:iam::000000000000:role/test-role",
+                "Handler", "index.handler",
+                "Code", Map.of("ZipFile", createZipBase64("index.js"))
+        ));
+        LambdaFunction fn = service.createFunction(REGION, req);
+        assertEquals("index.handler", fn.getHandler());
+    }
+
+    @Test
+    void createFunctionWithMissingHandler() throws Exception {
+        Map<String, Object> req = new java.util.HashMap<>(Map.of(
+                "FunctionName", "missing-handler-fn",
+                "Runtime", "nodejs20.x",
+                "Role", "arn:aws:iam::000000000000:role/test-role",
+                "Handler", "src/index.handler",
+                "Code", Map.of("ZipFile", createZipBase64("other.js"))
+        ));
+        AwsException ex = assertThrows(AwsException.class, () -> service.createFunction(REGION, req));
+        assertEquals("InvalidParameterValueException", ex.getErrorCode());
+    }
+
+    @Test
+    void createDotnetFunctionWithAssemblyHandler() throws Exception {
+        Map<String, Object> req = new java.util.HashMap<>(Map.of(
+                "FunctionName", "dotnet-fn",
+                "Runtime", "dotnet6",
+                "Role", "arn:aws:iam::000000000000:role/test-role",
+                "Handler", "blank-net-lambda::blank_net_lambda.Function::FunctionHandler",
+                "Code", Map.of("ZipFile", createZipBase64("blank-net-lambda.dll"))
+        ));
+        LambdaFunction fn = service.createFunction(REGION, req);
+        assertEquals("blank-net-lambda::blank_net_lambda.Function::FunctionHandler", fn.getHandler());
     }
 
     @Test
