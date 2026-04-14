@@ -237,4 +237,195 @@ class LambdaServiceTest {
         LambdaFunction updated = service.updateFunctionCode(REGION, "update-fn", Map.of());
         assertNotEquals(originalRevision, updated.getRevisionId());
     }
+
+    @Test
+    void rehydrateConcurrency_restoresReservedFromStore() {
+        // Simulate a persisted state: functions already live in the store
+        // with reserved values before the limiter is populated.
+        service.createFunction(REGION, baseRequest("persisted-a"));
+        service.createFunction(REGION, baseRequest("persisted-b"));
+        service.putFunctionConcurrency(REGION, "persisted-a", 300);
+        service.putFunctionConcurrency(REGION, "persisted-b", 200);
+
+        // Build a second service over the same store with a fresh limiter.
+        LambdaFunctionStore store = new LambdaFunctionStore(new InMemoryStorage<>());
+        // Copy the two persisted functions into the new store to emulate a
+        // restart with the same disk state.
+        for (LambdaFunction fn : new java.util.ArrayList<>(
+                service.listFunctions(REGION))) {
+            store.save(REGION, fn);
+        }
+        LambdaService rebooted = new LambdaService(store, new WarmPool(),
+                new CodeStore(Path.of("target/test-data/lambda-code")),
+                new ZipExtractor(), new RegionResolver(REGION, "000000000000"));
+
+        // Starts empty…
+        assertEquals(0, rebooted.concurrencyLimiter().totalReserved(REGION));
+        // …until rehydrate walks the store and re-registers the reserved values.
+        rebooted.rehydrateConcurrency();
+        assertEquals(500, rebooted.concurrencyLimiter().totalReserved(REGION));
+    }
+
+    @Test
+    void multiArnPutFunctionConcurrency_respectsRegionTotalUnderContention() throws Exception {
+        // Two different functions racing a Put near the unreserved floor.
+        // Both try to reserve an amount that — summed — would push the
+        // region below unreserved-min. reservedLock must serialize so that
+        // only one wins.
+        service.createFunction(REGION, baseRequest("multi-a"));
+        service.createFunction(REGION, baseRequest("multi-b"));
+
+        // Defaults: regionLimit=1000, unreservedMin=100. Each Put asks for
+        // 500; together they would leave 0 unreserved.
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        try {
+            java.util.concurrent.Future<Throwable> fA = pool.submit(() -> {
+                start.await();
+                try {
+                    service.putFunctionConcurrency(REGION, "multi-a", 500);
+                    return null;
+                } catch (Throwable t) { return t; }
+            });
+            java.util.concurrent.Future<Throwable> fB = pool.submit(() -> {
+                start.await();
+                try {
+                    service.putFunctionConcurrency(REGION, "multi-b", 500);
+                    return null;
+                } catch (Throwable t) { return t; }
+            });
+            start.countDown();
+
+            Throwable rA = fA.get();
+            Throwable rB = fB.get();
+
+            // Exactly one must have been rejected with LimitExceededException.
+            int successes = (rA == null ? 1 : 0) + (rB == null ? 1 : 0);
+            assertEquals(1, successes, "exactly one Put must win");
+            Throwable rejected = rA != null ? rA : rB;
+            assertTrue(rejected instanceof AwsException
+                            && "LimitExceededException".equals(((AwsException) rejected).getErrorCode()),
+                    "other Put must be rejected, got " + rejected);
+            assertEquals(500,
+                    service.concurrencyLimiter().totalReserved(REGION),
+                    "limiter total must reflect only the winning Put");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void putFunctionConcurrency_rollsBackLimiterIfSaveFails() {
+        // If functionStore.save throws after the limiter has been updated,
+        // the limiter must be restored so Σreserved stays consistent with
+        // what the store actually persisted.
+        FailingStore failing = new FailingStore();
+        LambdaService svc = new LambdaService(failing, new WarmPool(),
+                new CodeStore(Path.of("target/test-data/lambda-code")),
+                new ZipExtractor(), new RegionResolver(REGION, "000000000000"));
+        svc.createFunction(REGION, baseRequest("rb-fn"));
+        // Baseline: Put of 300 succeeds
+        svc.putFunctionConcurrency(REGION, "rb-fn", 300);
+        assertEquals(300, svc.concurrencyLimiter().totalReserved(REGION));
+
+        // Now make the next save() explode and try to Put 500
+        failing.shouldFail = true;
+        assertThrows(RuntimeException.class,
+                () -> svc.putFunctionConcurrency(REGION, "rb-fn", 500));
+
+        // Limiter must have rolled back to the previous 300
+        assertEquals(300, svc.concurrencyLimiter().totalReserved(REGION),
+                "limiter must unwind on save failure");
+    }
+
+    @Test
+    void deleteFunction_preservesInflightPermitUntilItCloses() {
+        // A deleteFunction that lands while an invocation is still holding a
+        // permit must not drop the counter — the permit close() at the end
+        // of the running invocation still has to decrement something valid.
+        service.createFunction(REGION, baseRequest("del-inflight"));
+        service.putFunctionConcurrency(REGION, "del-inflight", 2);
+
+        LambdaFunction fn = service.getFunction(REGION, "del-inflight");
+        String arn = fn.getFunctionArn();
+        LambdaConcurrencyLimiter.Permit held =
+                service.concurrencyLimiter().acquire(fn);
+        assertEquals(1, service.concurrencyLimiter().inflightCount(arn));
+
+        service.deleteFunction(REGION, "del-inflight");
+
+        // Reserved is cleared from the limiter, but the inflight counter
+        // must still be live for the held permit to decrement into.
+        assertEquals(0, service.concurrencyLimiter().totalReserved(REGION));
+        assertEquals(1, service.concurrencyLimiter().inflightCount(arn),
+                "inflight must survive delete until the permit closes");
+
+        held.close();
+        assertEquals(0, service.concurrencyLimiter().inflightCount(arn));
+    }
+
+    /**
+     * Test helper: a LambdaFunctionStore whose save() throws on demand so
+     * tests can exercise the LambdaService rollback path.
+     */
+    private static final class FailingStore extends LambdaFunctionStore {
+        boolean shouldFail = false;
+        FailingStore() {
+            super(new InMemoryStorage<String, LambdaFunction>());
+        }
+        @Override
+        public void save(String region, LambdaFunction fn) {
+            if (shouldFail) {
+                throw new RuntimeException("injected save failure");
+            }
+            super.save(region, fn);
+        }
+    }
+
+    @Test
+    void concurrentPutFunctionConcurrency_endsInConsistentState() throws Exception {
+        // Exercise the per-function serialization in concurrencyOpLocks:
+        // two threads racing Put on the same function must leave the
+        // limiter and the persisted reserved value in agreement with
+        // whichever write landed last.
+        service.createFunction(REGION, baseRequest("race-fn"));
+
+        int iterations = 50;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < iterations; i++) {
+                int a = 100 + i;
+                int b = 200 + i;
+                java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.Future<Integer> fA = pool.submit(() -> {
+                    start.await();
+                    return service.putFunctionConcurrency(REGION, "race-fn", a)
+                            .getReservedConcurrentExecutions();
+                });
+                java.util.concurrent.Future<Integer> fB = pool.submit(() -> {
+                    start.await();
+                    return service.putFunctionConcurrency(REGION, "race-fn", b)
+                            .getReservedConcurrentExecutions();
+                });
+                start.countDown();
+                fA.get();
+                fB.get();
+
+                LambdaFunction fn = service.getFunction(REGION, "race-fn");
+                Integer stored = fn.getReservedConcurrentExecutions();
+                assertTrue(stored.equals(a) || stored.equals(b),
+                        "store should reflect one of the two writes, got " + stored);
+                // The real invariant: the limiter's Σreserved for this
+                // region must agree with what was persisted. Comparing
+                // getFunctionConcurrency() to stored would be a tautology —
+                // both read the same LambdaFunction field — so assert
+                // against the limiter's independently-maintained total.
+                assertEquals(stored.intValue(),
+                        service.concurrencyLimiter().totalReserved(REGION),
+                        "limiter totalReserved must match persisted reserved value");
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

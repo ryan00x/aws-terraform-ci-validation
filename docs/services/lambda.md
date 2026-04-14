@@ -39,14 +39,28 @@ Lambda runs your function code inside real Docker containers — the same way re
 | `ListTags` | List tags on a function |
 | `TagResource` | Tag a function |
 | `UntagResource` | Untag a function |
-| `PutFunctionConcurrency` | Set reserved concurrent executions (stub — value stored but not enforced) |
+| `PutFunctionConcurrency` | Set reserved concurrent executions |
 | `GetFunctionConcurrency` | Get reserved concurrent executions |
 | `DeleteFunctionConcurrency` | Clear reserved concurrent executions |
 
-!!! note "Concurrency is a stub"
-    `PutFunctionConcurrency` persists `ReservedConcurrentExecutions` on the function
-    and echoes it back, but Floci does not enforce the limit at invocation time and
-    does not validate against the account-level concurrent execution limit.
+!!! note "Concurrency enforcement"
+    Reserved concurrency is enforced: invocations beyond the reserved value
+    return `TooManyRequestsException` (HTTP 429). Functions without a reserved
+    value share a **per-region** pool — AWS Lambda's "account-level" limit is
+    in fact a per-account-per-region quota, and Floci mirrors that by
+    partitioning counters on the ARN's region segment. The pool size (default
+    1000) is configurable via `floci.services.lambda.region-concurrency-limit`
+    and applies independently to each region. `PutFunctionConcurrency`
+    validates that the requested value leaves at least
+    `floci.services.lambda.unreserved-concurrency-min` (default 100) available
+    for unreserved functions in that region. `PutProvisionedConcurrencyConfig`
+    and related provisioned-concurrency operations remain unimplemented.
+
+    Reducing or clearing a function's reserved value does not kill
+    invocations that are already in flight — this matches AWS, which
+    applies changes only to new invocations. As a consequence, during the
+    drain window `Σreserved-inflight + unreserved-inflight` can briefly
+    exceed `region-concurrency-limit`.
 
 Function URLs are also reachable directly on `/{proxy:.*}` under the Lambda URL controller, which routes the request into the normal `Invoke` path.
 
@@ -80,6 +94,8 @@ floci:
       code-path: ./data/lambda-code        # ZIP storage location
       poll-interval-ms: 1000
       container-idle-timeout-seconds: 300  # Idle container cleanup
+      region-concurrency-limit: 1000       # Concurrent executions ceiling per region
+      unreserved-concurrency-min: 100      # Min unreserved capacity PutFunctionConcurrency must leave
 ```
 
 ### Docker socket requirement

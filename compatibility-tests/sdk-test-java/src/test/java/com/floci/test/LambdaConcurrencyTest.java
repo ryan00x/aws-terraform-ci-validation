@@ -135,4 +135,98 @@ class LambdaConcurrencyTest {
                         .build()))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
+
+    @Test
+    @Order(9)
+    void putFunctionConcurrency_exceedsAccountUnreservedMin_throwsLimitExceeded() {
+        // Floci default: regionLimit=1000, unreservedMin=100 → max single Put = 900
+        // The Lambda SDK v2 model does not declare LimitExceededException as a
+        // dedicated subclass, so the SDK surfaces it as the generic
+        // LambdaException. We therefore assert the wire-level identity
+        // (status code + __type error code) rather than a Java type, which is
+        // what AWS clients actually discriminate on.
+        assertThatThrownBy(() -> lambda.putFunctionConcurrency(
+                PutFunctionConcurrencyRequest.builder()
+                        .functionName(FUNCTION_NAME)
+                        .reservedConcurrentExecutions(901)
+                        .build()))
+                .isInstanceOfSatisfying(LambdaException.class, ex -> {
+                    assertThat(ex.statusCode()).isEqualTo(400);
+                    assertThat(ex.awsErrorDetails().errorCode()).isEqualTo("LimitExceededException");
+                    assertThat(ex.getMessage()).contains("UnreservedConcurrentExecution");
+                });
+    }
+
+    @Test
+    @Order(10)
+    void invoke_whenReservedZero_throwsTooManyRequests() {
+        lambda.putFunctionConcurrency(PutFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .reservedConcurrentExecutions(0)
+                .build());
+
+        // Event-type invoke still goes through the concurrency gate; reserved=0
+        // should throttle every request regardless of invocation type.
+        assertThatThrownBy(() -> lambda.invoke(InvokeRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .invocationType(InvocationType.EVENT)
+                .payload(SdkBytes.fromUtf8String("{}"))
+                .build()))
+                .isInstanceOf(TooManyRequestsException.class);
+
+        // Clear so teardown and other tests are not affected
+        lambda.deleteFunctionConcurrency(DeleteFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME).build());
+    }
+
+    @Test
+    @Order(11)
+    void invoke_dryRunBypassesConcurrencyGate() {
+        lambda.putFunctionConcurrency(PutFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .reservedConcurrentExecutions(0)
+                .build());
+
+        // DryRun validates inputs without dispatching; it must not be throttled.
+        InvokeResponse response = lambda.invoke(InvokeRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .invocationType(InvocationType.DRY_RUN)
+                .payload(SdkBytes.fromUtf8String("{}"))
+                .build());
+
+        assertThat(response.statusCode()).isEqualTo(204);
+
+        lambda.deleteFunctionConcurrency(DeleteFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME).build());
+    }
+
+    @Test
+    @Order(12)
+    void invoke_withVersionQualifier_stillHonorsReservedOnLatest() {
+        // Regression guard: if a future change adds Qualifier routing that
+        // resolves to a published version snapshot, the snapshot currently
+        // has reservedConcurrentExecutions=null and would silently bypass a
+        // reserved=0 on $LATEST. Today Floci ignores the qualifier and
+        // routes the invoke to $LATEST, so reserved=0 must still throttle.
+        // Keeping this test green after a qualifier-routing change will
+        // require copying the reservation onto the snapshot (or keying the
+        // limiter off the base ARN).
+        lambda.publishVersion(PublishVersionRequest.builder()
+                .functionName(FUNCTION_NAME).build());
+        lambda.putFunctionConcurrency(PutFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .reservedConcurrentExecutions(0)
+                .build());
+
+        assertThatThrownBy(() -> lambda.invoke(InvokeRequest.builder()
+                .functionName(FUNCTION_NAME)
+                .qualifier("1")
+                .invocationType(InvocationType.EVENT)
+                .payload(SdkBytes.fromUtf8String("{}"))
+                .build()))
+                .isInstanceOf(TooManyRequestsException.class);
+
+        lambda.deleteFunctionConcurrency(DeleteFunctionConcurrencyRequest.builder()
+                .functionName(FUNCTION_NAME).build());
+    }
 }

@@ -15,6 +15,7 @@ import io.github.hectorvent.floci.services.lambda.zip.ZipExtractor;
 import io.github.hectorvent.floci.services.s3.S3Service;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.sqs.SqsService;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -43,6 +44,7 @@ public class LambdaService {
 
     private final LambdaFunctionStore functionStore;
     private final LambdaExecutorService executorService;
+    private final LambdaConcurrencyLimiter concurrencyLimiter;
     private final WarmPool warmPool;
     private final CodeStore codeStore;
     private final ZipExtractor zipExtractor;
@@ -56,8 +58,28 @@ public class LambdaService {
     private final KinesisEventSourcePoller kinesisPoller;
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final ConcurrentHashMap<String, Integer> versionCounters = new ConcurrentHashMap<>();
+    /**
+     * Per-function locks covering PutFunctionConcurrency,
+     * DeleteFunctionConcurrency, and deleteFunction itself. Serializing the
+     * limiter update + persistence pair against itself for a given function
+     * prevents the limiter and store from diverging on interleaved concurrent
+     * requests.
+     *
+     * <p>Entries are intentionally never removed — see {@code deleteFunction}
+     * for the race this avoids. The map therefore grows by one {@code Object}
+     * per distinct function ARN the emulator has ever seen (create/delete
+     * cycles with fresh names included). Acceptable footprint for a local
+     * emulator workload.
+     */
+    private final ConcurrentHashMap<String, Object> concurrencyOpLocks = new ConcurrentHashMap<>();
 
-    /** Package-private constructor for testing without CDI. Config defaults (timeout=3, memory=128) apply. */
+    /**
+     * Package-private constructor for testing without CDI. Config defaults
+     * (timeout=3, memory=128) apply. A real {@link LambdaConcurrencyLimiter}
+     * with AWS-default limits is wired so concurrency operations exercise
+     * the same validation and bookkeeping as production rather than
+     * silently no-op'ing past null checks.
+     */
     LambdaService(LambdaFunctionStore functionStore,
                   WarmPool warmPool,
                   CodeStore codeStore,
@@ -65,6 +87,7 @@ public class LambdaService {
                   RegionResolver regionResolver) {
         this.functionStore = functionStore;
         this.executorService = null;
+        this.concurrencyLimiter = new LambdaConcurrencyLimiter();
         this.warmPool = warmPool;
         this.codeStore = codeStore;
         this.zipExtractor = zipExtractor;
@@ -82,6 +105,7 @@ public class LambdaService {
     @Inject
     public LambdaService(LambdaFunctionStore functionStore,
                           LambdaExecutorService executorService,
+                          LambdaConcurrencyLimiter concurrencyLimiter,
                           WarmPool warmPool,
                           CodeStore codeStore,
                           ZipExtractor zipExtractor,
@@ -96,6 +120,7 @@ public class LambdaService {
                           DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller) {
         this.functionStore = functionStore;
         this.executorService = executorService;
+        this.concurrencyLimiter = concurrencyLimiter;
         this.warmPool = warmPool;
         this.codeStore = codeStore;
         this.zipExtractor = zipExtractor;
@@ -108,6 +133,40 @@ public class LambdaService {
         this.poller = poller;
         this.kinesisPoller = kinesisPoller;
         this.dynamodbStreamsPoller = dynamodbStreamsPoller;
+    }
+
+    /** Package-private accessor for tests that want to assert limiter state directly. */
+    LambdaConcurrencyLimiter concurrencyLimiter() {
+        return concurrencyLimiter;
+    }
+
+    /**
+     * Rehydrates reserved concurrency into the limiter from persisted function state.
+     * Without this, restarts leave {@code totalReserved()=0} and allow validatePut /
+     * unreserved-pool sizing to drift until each function is re-Put.
+     */
+    @PostConstruct
+    void rehydrateConcurrency() {
+        if (concurrencyLimiter == null) {
+            return;
+        }
+        int count = 0;
+        for (LambdaFunction fn : functionStore.listAll()) {
+            // Reserved concurrency is a function-level property; published
+            // versions share the $LATEST record's value. Skip non-$LATEST
+            // entries to avoid double-counting into totalReserved().
+            if (!"$LATEST".equals(fn.getVersion())) {
+                continue;
+            }
+            Integer reserved = fn.getReservedConcurrentExecutions();
+            if (reserved != null) {
+                concurrencyLimiter.setReserved(fn.getFunctionArn(), reserved);
+                count++;
+            }
+        }
+        if (count > 0) {
+            LOG.infov("Restored reserved concurrency for {0} function(s)", count);
+        }
     }
 
     public LambdaFunction createFunction(String region, Map<String, Object> request) {
@@ -230,10 +289,23 @@ public class LambdaService {
     }
 
     public void deleteFunction(String region, String functionName) {
-        getFunction(region, functionName); // throws 404 if not found
+        LambdaFunction fn = getFunction(region, functionName); // throws 404 if not found
+        String arn = fn.getFunctionArn();
         warmPool.drainFunction(functionName);
-        codeStore.delete(functionName);
-        functionStore.delete(region, functionName);
+        // Take the same per-function lock used by Put/DeleteFunctionConcurrency
+        // so a concurrent concurrency mutation cannot interleave with the
+        // limiter reset and store delete and leave the two views out of sync.
+        // The lock entry itself stays in the map after the delete: removing it
+        // could race with another thread already synchronized on the same
+        // object, letting a follow-up request allocate a fresh lock and run
+        // in parallel — the very serialization this map exists to prevent.
+        synchronized (lockForConcurrencyOp(arn)) {
+            if (concurrencyLimiter != null) {
+                concurrencyLimiter.reset(arn);
+            }
+            codeStore.delete(functionName);
+            functionStore.delete(region, functionName);
+        }
         LOG.infov("Deleted Lambda function: {0}", functionName);
     }
 
@@ -597,8 +669,29 @@ public class LambdaService {
                     "ReservedConcurrentExecutions must be a non-negative integer", 400);
         }
         LambdaFunction fn = getFunction(region, functionName);
-        fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
-        functionStore.save(region, fn);
+        String arn = fn.getFunctionArn();
+        // Serialize limiter update + store save for this function so that two
+        // concurrent Puts cannot leave the limiter and persisted state out of
+        // sync, regardless of which call acquires the reservedLock first.
+        synchronized (lockForConcurrencyOp(arn)) {
+            Integer previousReserved = null;
+            boolean limiterUpdated = false;
+            if (concurrencyLimiter != null) {
+                previousReserved = concurrencyLimiter.validateAndSetReserved(
+                        arn, reservedConcurrentExecutions);
+                limiterUpdated = true;
+            }
+            fn.setReservedConcurrentExecutions(reservedConcurrentExecutions);
+            try {
+                functionStore.save(region, fn);
+            } catch (RuntimeException e) {
+                if (limiterUpdated) {
+                    concurrencyLimiter.rollbackReservedIfExpected(
+                            arn, reservedConcurrentExecutions, previousReserved);
+                }
+                throw e;
+            }
+        }
         return fn;
     }
 
@@ -609,8 +702,29 @@ public class LambdaService {
 
     public void deleteFunctionConcurrency(String region, String functionName) {
         LambdaFunction fn = getFunction(region, functionName);
-        fn.setReservedConcurrentExecutions(null);
-        functionStore.save(region, fn);
+        String arn = fn.getFunctionArn();
+        synchronized (lockForConcurrencyOp(arn)) {
+            Integer previousReserved = null;
+            boolean limiterCleared = false;
+            if (concurrencyLimiter != null) {
+                previousReserved = concurrencyLimiter.clearReserved(arn);
+                limiterCleared = true;
+            }
+            fn.setReservedConcurrentExecutions(null);
+            try {
+                functionStore.save(region, fn);
+            } catch (RuntimeException e) {
+                if (limiterCleared && previousReserved != null) {
+                    concurrencyLimiter.rollbackReservedIfExpected(
+                            arn, null, previousReserved);
+                }
+                throw e;
+            }
+        }
+    }
+
+    private Object lockForConcurrencyOp(String functionArn) {
+        return concurrencyOpLocks.computeIfAbsent(functionArn, k -> new Object());
     }
 
     public LambdaFunction getFunctionByUrlId(String urlId) {

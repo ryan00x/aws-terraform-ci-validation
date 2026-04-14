@@ -509,6 +509,22 @@ public interface EmulatorConfig {
 
         /** Docker network to attach Lambda containers to. Empty = default bridge. */
         Optional<String> dockerNetwork();
+
+        /**
+         * Concurrent executions ceiling applied per region. AWS Lambda's
+         * "account-level" concurrency is in fact a per-region quota (default 1000);
+         * Floci mirrors that semantics and partitions counters by the region
+         * segment of each function ARN.
+         */
+        @WithDefault("1000")
+        int regionConcurrencyLimit();
+
+        /**
+         * Minimum unreserved concurrency that must remain after PutFunctionConcurrency,
+         * matching AWS (100). Puts that would leave less than this are rejected.
+         */
+        @WithDefault("100")
+        int unreservedConcurrencyMin();
     }
 
     interface Ec2ServiceConfig {
