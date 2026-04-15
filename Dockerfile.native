@@ -18,6 +18,7 @@ FROM quay.io/quarkus/quarkus-micro-image:2.0
 
 USER root
 WORKDIR /app
+
 RUN mkdir -p /app/data \
     && chown -R 1001:root /app \
     && chmod -R g+rwX /app
@@ -33,6 +34,7 @@ ENV FLOCI_VERSION=${VERSION}
 ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
 COPY --from=build /app/target/*-runner /app/application
+
 RUN chmod +x /app/application
 
 USER 1001

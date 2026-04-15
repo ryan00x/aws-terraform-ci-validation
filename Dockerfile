@@ -22,10 +22,10 @@ VOLUME /app/data
 EXPOSE 4566 6379-6399
 
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
-    CMD wget -q --spider http://localhost:4566/_floci/health || exit 1
+    CMD bash -c 'echo -e "GET /_floci/health HTTP/1.0\r\nHost: localhost\r\n\r\n" > /dev/tcp/localhost/4566' || exit 1
 
 ARG VERSION=latest
 ENV FLOCI_VERSION=${VERSION}
 ENV FLOCI_STORAGE_PERSISTENT_PATH=/app/data
 
-ENTRYPOINT ["java", "-jar", "quarkus-app/quarkus-run.jar"]
+ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-jar", "quarkus-app/quarkus-run.jar"]

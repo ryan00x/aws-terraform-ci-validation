@@ -40,10 +40,9 @@
     <dependencies>
         <!-- Quarkus REST (RESTEasy Reactive) -->
         <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-rest-jackson</artifactId>
+          <groupId>io.quarkus</groupId>
+          <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
-
         <!-- YAML config support -->
         <dependency>
             <groupId>io.quarkus</groupId>

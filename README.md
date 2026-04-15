@@ -45,6 +45,9 @@
 | ElastiCache (Redis + IAM auth) | ✅ | ❌ |
 | RDS (PostgreSQL + MySQL + IAM auth) | ✅ | ❌ |
 | MSK (Kafka + Redpanda) | ✅ | ❌ |
+| Athena (query state machine, mock mode) | ✅ | ❌ |
+| Glue Data Catalog | ✅ | ❌ |
+| Data Firehose (NDJSON delivery) | ✅ | ❌ |
 | S3 Object Lock (COMPLIANCE / GOVERNANCE) | ✅ | ⚠️ Partial |
 | DynamoDB Streams | ✅ | ⚠️ Partial |
 | IAM (users, roles, policies, groups) | ✅ | ⚠️ Partial |
@@ -117,6 +120,9 @@ flowchart LR
 | **ElastiCache** | **Real Docker containers** | Redis / Valkey, IAM auth, SigV4 validation |
 | **RDS** | **Real Docker containers** | PostgreSQL & MySQL, IAM auth, JDBC-compatible |
 | **MSK** | **Real Docker containers** | Kafka compatible via Redpanda orchestration |
+| **Athena** | In-process | Query state machine (mock mode — queries accepted, results empty) |
+| **Glue** | In-process | Data Catalog for metadata management |
+| **Data Firehose** | In-process | Streaming data delivery; records flushed as NDJSON to S3 |
 | **ECS** | **Real Docker containers** | Clusters, task definitions, tasks, services, capacity providers, task sets |
 | **EC2** | In-process | VPCs, subnets, security groups, instances, AMIs, key pairs, internet gateways, route tables, Elastic IPs, tags |
 | **ACM** | In-process | Certificate issuance, validation lifecycle |
@@ -131,7 +137,7 @@ flowchart LR
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**30 AWS services supported.**
+**33 AWS services supported.**
 
 ## Quick Start
 
@@ -232,7 +238,7 @@ Available compatibility test modules:
 | Tag | Description |
 |---|---|
 | `latest` | Native image — sub-second startup **(recommended)** |
-| `latest-jvm` | JVM image — broadest platform compatibility |
+| `latest-jvm` | JVM image |
 | `x.y.z` / `x.y.z-jvm` | Pinned releases |
 
 ## Configuration
