@@ -196,10 +196,15 @@ public class EcrRegistryManager {
             specBuilder.withBind(hostPersistentPath, internalMountPath);
             env.add("REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=" + internalMountPath + "/ecr/registry");
         } else {
-            // Host path bind-mount
+            // Host path bind-mount.
+            // normalize() eliminates any "./" segments produced by toAbsolutePath() on a
+            // relative config path (e.g. "./data/ecr" → "/app/./data/ecr") so the
+            // replace() matches reliably.
             String dataPath = Paths.get(config.services().ecr().dataPath(), "registry")
-                    .toAbsolutePath().toString();
-            String hostDataPath = dataPath.replace(config.storage().persistentPath(), hostPersistentPath);
+                    .toAbsolutePath().normalize().toString();
+            String persistentPath = Paths.get(config.storage().persistentPath())
+                    .toAbsolutePath().normalize().toString();
+            String hostDataPath = dataPath.replace(persistentPath, hostPersistentPath);
             if (!inContainer) {
                 ensureDataDir();
             }
