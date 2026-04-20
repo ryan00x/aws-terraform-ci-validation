@@ -44,6 +44,7 @@ public class SesService {
     }
 
     public Identity verifyEmailIdentity(String emailAddress, String region) {
+        validateIdentityWhitespace(emailAddress, "Email address");
         if (emailAddress == null || emailAddress.isBlank()) {
             throw new AwsException("InvalidParameterValue", "Email address is required.", 400);
         }
@@ -58,6 +59,7 @@ public class SesService {
     }
 
     public Identity verifyDomainIdentity(String domain, String region) {
+        validateIdentityWhitespace(domain, "Domain");
         if (domain == null || domain.isBlank()) {
             throw new AwsException("InvalidParameterValue", "Domain is required.", 400);
         }
@@ -72,8 +74,23 @@ public class SesService {
     }
 
     public void deleteIdentity(String identityValue, String region) {
+        if (identityValue == null || identityValue.isBlank()) {
+            return;
+        }
         String key = identityKey(region, identityValue);
         identityStore.delete(key);
+
+        String prefix = "identity::" + region + "::";
+        List<String> keys = new ArrayList<>(identityStore.keys().stream()
+                .filter(k -> k.startsWith(prefix))
+                .toList());
+        for (String storedKey : keys) {
+            Identity storedIdentity = identityStore.get(storedKey).orElse(null);
+            if (storedIdentity != null && identityValue.equals(storedIdentity.getIdentity())) {
+                identityStore.delete(storedKey);
+            }
+        }
+
         LOG.infov("Deleted identity: {0}", identityValue);
     }
 
@@ -214,6 +231,16 @@ public class SesService {
     }
 
     private static String identityKey(String region, String identity) {
+        validateIdentityWhitespace(identity, "Identity");
         return "identity::" + region + "::" + identity;
+    }
+
+    private static void validateIdentityWhitespace(String identity, String fieldName) {
+        if (identity == null || identity.isBlank()) {
+            return;
+        }
+        if (Character.isWhitespace(identity.charAt(0)) || Character.isWhitespace(identity.charAt(identity.length() - 1))) {
+            throw new AwsException("InvalidParameterValue", fieldName + " must not contain leading or trailing whitespace.", 400);
+        }
     }
 }

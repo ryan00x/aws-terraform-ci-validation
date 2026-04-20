@@ -385,6 +385,63 @@ class SesIntegrationTest {
 
     @Test
     @Order(21)
+    void deleteDomainIdentity() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", authorization("email"))
+            .formParam("Action", "DeleteIdentity")
+            .formParam("Identity", "example.com")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("DeleteIdentityResult"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", authorization("email"))
+            .formParam("Action", "ListIdentities")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(not(containsString("example.com")));
+    }
+
+    @Test
+    @Order(22)
+    void verifyEmailIdentity_rejectsLeadingTrailingWhitespace() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", authorization("email"))
+            .formParam("Action", "VerifyEmailIdentity")
+            .formParam("EmailAddress", " sender@example.com ")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidParameterValue"))
+            .body(containsString("leading or trailing whitespace"));
+    }
+
+    @Test
+    @Order(23)
+    void verifyDomainIdentity_rejectsLeadingTrailingWhitespace() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", authorization("email"))
+            .formParam("Action", "VerifyDomainIdentity")
+            .formParam("Domain", " example.com ")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body(containsString("InvalidParameterValue"))
+            .body(containsString("leading or trailing whitespace"));
+    }
+
+    @Test
+    @Order(24)
     void unsupportedAction_returns400() {
         given()
             .contentType("application/x-www-form-urlencoded")

@@ -13,9 +13,11 @@ import io.github.hectorvent.floci.services.s3.model.MultipartUpload;
 import io.github.hectorvent.floci.services.s3.model.FilterRule;
 import io.github.hectorvent.floci.services.s3.model.NotificationConfiguration;
 import io.github.hectorvent.floci.services.s3.model.ObjectAttributeName;
+import io.github.hectorvent.floci.services.s3.model.CopyObjectOptions;
 import io.github.hectorvent.floci.services.s3.model.QueueNotification;
 import io.github.hectorvent.floci.services.s3.model.ObjectLockRetention;
 import io.github.hectorvent.floci.services.s3.model.Part;
+import io.github.hectorvent.floci.services.s3.model.PutObjectOptions;
 import io.github.hectorvent.floci.services.s3.model.S3Checksum;
 import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.s3.model.TopicNotification;
@@ -28,6 +30,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 import java.io.ByteArrayOutputStream;
+import java.io.StringReader;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -42,6 +45,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamConstants;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,8 +66,16 @@ public class S3Controller {
     private static final DateTimeFormatter RFC_822 = DateTimeFormatter
             .ofPattern("EEE, dd MMM yyyy HH:mm:ss z", Locale.US)
             .withZone(ZoneId.of("GMT"));
+    private static final XMLInputFactory NOTIFICATION_XML_FACTORY;
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    static {
+        NOTIFICATION_XML_FACTORY = XMLInputFactory.newInstance();
+        NOTIFICATION_XML_FACTORY.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true);
+        NOTIFICATION_XML_FACTORY.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
+        NOTIFICATION_XML_FACTORY.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+    }
 
     private final S3Service s3Service;
     private final S3SelectService s3SelectService;
@@ -444,14 +459,19 @@ public class S3Controller {
             String persistedEncoding = toPersistedContentEncoding(contentEncoding);
             String contentDisposition = httpHeaders.getHeaderString("Content-Disposition");
             String cacheControl = httpHeaders.getHeaderString("Cache-Control");
+            String serverSideEncryption = httpHeaders.getHeaderString("x-amz-server-side-encryption");
             String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
             S3Object obj = s3Service.putObject(bucket, key, data, contentType, extractUserMetadata(httpHeaders),
-                    httpHeaders.getHeaderString("x-amz-storage-class"),
-                    persistedEncoding,
-                    lockMode, retainUntil, legalHold,
-                    contentDisposition,
-                    cacheControl,
-                    cannedAcl);
+                    new PutObjectOptions()
+                            .withStorageClass(httpHeaders.getHeaderString("x-amz-storage-class"))
+                            .withContentEncoding(persistedEncoding)
+                            .withObjectLockMode(lockMode)
+                            .withRetainUntilDate(retainUntil)
+                            .withLegalHoldStatus(legalHold)
+                            .withContentDisposition(contentDisposition)
+                            .withCacheControl(cacheControl)
+                            .withServerSideEncryption(serverSideEncryption)
+                            .withAcl(cannedAcl));
             var resp = Response.ok().header("ETag", obj.getETag());
             if (obj.getVersionId() != null) {
                 resp.header("x-amz-version-id", obj.getVersionId());
@@ -779,6 +799,7 @@ public class S3Controller {
                         extractUserMetadata(httpHeaders),
                         httpHeaders.getHeaderString("x-amz-storage-class"),
                         httpHeaders.getHeaderString("Content-Disposition"),
+                        httpHeaders.getHeaderString("x-amz-server-side-encryption"),
                         httpHeaders.getHeaderString("x-amz-acl"));
                 String xml = new XmlBuilder()
                         .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
@@ -1095,25 +1116,90 @@ public class S3Controller {
 
     private static List<ParsedNotificationGroup> parseNotificationGroups(
             String xml, String groupElement, String arnElement) {
-        var groups = XmlParser.extractGroupsMulti(xml, groupElement);
-        var filters = XmlParser.extractPairsPerGroup(xml, groupElement,
-                "FilterRule", "Name", "Value");
         List<ParsedNotificationGroup> result = new ArrayList<>();
-        for (int i = 0; i < groups.size(); i++) {
-            var group = groups.get(i);
-            String id = group.getOrDefault("Id", List.of("")).getFirst();
-            List<String> arns = group.get(arnElement);
-            List<String> events = group.get("Event");
-            if (arns != null && !arns.isEmpty() && events != null && !events.isEmpty()) {
-                List<FilterRule> rules = i < filters.size()
-                        ? filters.get(i).entrySet().stream()
-                            .map(e -> new FilterRule(e.getKey(), e.getValue()))
-                            .toList()
-                        : List.of();
-                result.add(new ParsedNotificationGroup(id, arns.getFirst(), events, rules));
+        if (xml == null || xml.isEmpty()) {
+            return result;
+        }
+        try {
+            XMLStreamReader reader = NOTIFICATION_XML_FACTORY.createXMLStreamReader(new StringReader(xml));
+            while (reader.hasNext()) {
+                int event = reader.next();
+                if (event == XMLStreamConstants.START_ELEMENT && groupElement.equals(reader.getLocalName())) {
+                    ParsedNotificationGroup parsed = readNotificationGroup(reader, groupElement, arnElement);
+                    if (parsed.arn() != null && !parsed.events().isEmpty()) {
+                        result.add(parsed);
+                    }
+                }
             }
+            reader.close();
+        } catch (Exception ignored) {
         }
         return result;
+    }
+
+    private static ParsedNotificationGroup readNotificationGroup(
+            XMLStreamReader reader, String groupElement, String arnElement) throws XMLStreamException {
+        String id = "";
+        String arn = null;
+        List<String> events = new ArrayList<>();
+        List<FilterRule> filterRules = new ArrayList<>();
+        int depth = 1;
+
+        while (reader.hasNext()) {
+            int event = reader.next();
+            if (event == XMLStreamConstants.START_ELEMENT) {
+                String local = reader.getLocalName();
+                if (depth == 1 && "Id".equals(local)) {
+                    id = reader.getElementText();
+                } else if (depth == 1 && arnElement.equals(local)) {
+                    arn = reader.getElementText();
+                } else if (depth == 1 && "Event".equals(local)) {
+                    events.add(reader.getElementText());
+                } else if ("FilterRule".equals(local)) {
+                    FilterRule rule = readFilterRule(reader);
+                    if (rule != null) {
+                        filterRules.add(rule);
+                    }
+                } else {
+                    depth++;
+                }
+            } else if (event == XMLStreamConstants.END_ELEMENT) {
+                String local = reader.getLocalName();
+                if (groupElement.equals(local) && depth == 1) {
+                    break;
+                }
+                depth--;
+            }
+        }
+
+        return new ParsedNotificationGroup(id, arn, events, filterRules);
+    }
+
+    private static FilterRule readFilterRule(XMLStreamReader reader) throws XMLStreamException {
+        String name = null;
+        String value = null;
+        int depth = 1;
+
+        while (reader.hasNext()) {
+            int event = reader.next();
+            if (event == XMLStreamConstants.START_ELEMENT) {
+                String local = reader.getLocalName();
+                if (depth == 1 && "Name".equals(local)) {
+                    name = reader.getElementText();
+                } else if (depth == 1 && "Value".equals(local)) {
+                    value = reader.getElementText();
+                } else {
+                    depth++;
+                }
+            } else if (event == XMLStreamConstants.END_ELEMENT) {
+                if ("FilterRule".equals(reader.getLocalName()) && depth == 1) {
+                    break;
+                }
+                depth--;
+            }
+        }
+
+        return name != null && value != null ? new FilterRule(name, value) : null;
     }
 
     private static void appendFilterRules(XmlBuilder xml, List<FilterRule> rules) {
@@ -1361,6 +1447,9 @@ public class S3Controller {
         if (obj.getCacheControl() != null) {
             resp.header("Cache-Control", obj.getCacheControl());
         }
+        if (obj.getServerSideEncryption() != null) {
+            resp.header("x-amz-server-side-encryption", obj.getServerSideEncryption());
+        }
         if (obj.getMetadata() != null) {
             for (Map.Entry<String, String> entry : obj.getMetadata().entrySet()) {
                 resp.header("x-amz-meta-" + entry.getKey(), entry.getValue());
@@ -1407,16 +1496,19 @@ public class S3Controller {
         String copyContentEncoding = toPersistedContentEncoding(httpHeaders.getHeaderString("Content-Encoding"));
         String copyContentDisposition = httpHeaders.getHeaderString("Content-Disposition");
         String copyCacheControl = httpHeaders.getHeaderString("Cache-Control");
+        String copyServerSideEncryption = httpHeaders.getHeaderString("x-amz-server-side-encryption");
         String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
         S3Object copy = s3Service.copyObject(sourceBucket, sourceKey, destBucket, destKey,
-                httpHeaders.getHeaderString("x-amz-metadata-directive"),
-                extractUserMetadata(httpHeaders),
-                httpHeaders.getHeaderString("x-amz-storage-class"),
-                contentType,
-                copyContentEncoding,
-                copyContentDisposition,
-                copyCacheControl,
-                cannedAcl);
+                new CopyObjectOptions()
+                        .withMetadataDirective(httpHeaders.getHeaderString("x-amz-metadata-directive"))
+                        .withReplacementMetadata(extractUserMetadata(httpHeaders))
+                        .withStorageClass(httpHeaders.getHeaderString("x-amz-storage-class"))
+                        .withContentType(contentType)
+                        .withContentEncoding(copyContentEncoding)
+                        .withContentDisposition(copyContentDisposition)
+                        .withCacheControl(copyCacheControl)
+                        .withServerSideEncryption(copyServerSideEncryption)
+                        .withAcl(cannedAcl));
         String xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .start("CopyObjectResult", AwsNamespaces.S3)
