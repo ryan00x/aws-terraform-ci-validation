@@ -4,8 +4,8 @@ name: Release
 # Builds native (amd64 + arm64) and JVM Docker images and pushes them to Docker Hub.
 #
 # Published tags:
-#   Native:  hectorvent/floci:1.2.3   hectorvent/floci:latest
-#   JVM:     hectorvent/floci:1.2.3-jvm   hectorvent/floci:latest-jvm
+#   Native:  floci/floci:1.2.3   floci/floci:latest
+#   JVM:     floci/floci:1.2.3-jvm   floci/floci:latest-jvm
 #
 # Required secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
 
