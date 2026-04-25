@@ -20,12 +20,16 @@ import org.jboss.logging.Logger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class DynamoDbService {
@@ -37,6 +41,11 @@ public class DynamoDbService {
     // Items stored per table: storageKey -> Map<itemKey, item>
     // itemKey is "pk" or "pk#sk" depending on table schema
     private final ConcurrentHashMap<String, ConcurrentSkipListMap<String, JsonNode>> itemsByTable = new ConcurrentHashMap<>();
+    // Per-item locks: storageKey -> itemKey -> ReentrantLock. Locks are created lazily
+    // on first access and cleared with the table (see deleteTable); transactWriteItems
+    // relies on ReentrantLock's re-entrancy so the inner put/update/delete calls do
+    // not deadlock after the outer transaction already took each participant's lock.
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, ReentrantLock>> itemLocks = new ConcurrentHashMap<>();
     private final RegionResolver regionResolver;
     private DynamoDbStreamService streamService;
     private KinesisStreamingForwarder kinesisForwarder;
@@ -209,6 +218,7 @@ public class DynamoDbService {
         }
         tableStore.delete(storageKey);
         itemsByTable.remove(storageKey);
+        itemLocks.remove(storageKey);
         if (itemStore != null) {
             itemStore.delete(storageKey);
         }
@@ -247,25 +257,28 @@ public class DynamoDbService {
                 .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
 
         String itemKey = buildItemKey(table, item);
-        var tableItems = itemsByTable.computeIfAbsent(storageKey, k -> new ConcurrentSkipListMap<>());
 
-        JsonNode existing = tableItems.get(itemKey);
+        withItemLock(storageKey, itemKey, () -> {
+            var tableItems = itemsByTable.computeIfAbsent(storageKey, k -> new ConcurrentSkipListMap<>());
 
-        if (conditionExpression != null) {
-            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
-        }
+            JsonNode existing = tableItems.get(itemKey);
 
-        tableItems.put(itemKey, item);
-        persistItems(storageKey);
-        LOG.debugv("Put item in {0}: key={1}", canonicalTableName, itemKey);
+            if (conditionExpression != null) {
+                evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
+            }
 
-        String eventName = existing == null ? "INSERT" : "MODIFY";
-        if (streamService != null) {
-            streamService.captureEvent(canonicalTableName, eventName, existing, item, table, region);
-        }
-        if (kinesisForwarder != null) {
-            kinesisForwarder.forward(eventName, existing, item, table, region);
-        }
+            tableItems.put(itemKey, item);
+            persistItems(storageKey);
+            LOG.debugv("Put item in {0}: key={1}", canonicalTableName, itemKey);
+
+            String eventName = existing == null ? "INSERT" : "MODIFY";
+            if (streamService != null) {
+                streamService.captureEvent(canonicalTableName, eventName, existing, item, table, region);
+            }
+            if (kinesisForwarder != null) {
+                kinesisForwarder.forward(eventName, existing, item, table, region);
+            }
+        });
     }
 
     public JsonNode getItem(String tableName, JsonNode key) {
@@ -304,28 +317,31 @@ public class DynamoDbService {
                 .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
 
         String itemKey = buildItemKey(table, key);
-        var items = itemsByTable.get(storageKey);
-        if (items == null) return null;
 
-        if (conditionExpression != null) {
-            JsonNode existing = items.get(itemKey);
-            evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
-        }
+        return withItemLock(storageKey, itemKey, () -> {
+            var items = itemsByTable.get(storageKey);
+            if (items == null) return null;
 
-        JsonNode removed = items.remove(itemKey);
-        persistItems(storageKey);
-        LOG.debugv("Deleted item from {0}: key={1}", canonicalTableName, itemKey);
-
-        if (removed != null) {
-            if (streamService != null) {
-                streamService.captureEvent(canonicalTableName, "REMOVE", removed, null, table, region);
+            if (conditionExpression != null) {
+                JsonNode existing = items.get(itemKey);
+                evaluateCondition(existing, conditionExpression, exprAttrNames, exprAttrValues, returnValuesOnConditionCheckFailure);
             }
-            if (kinesisForwarder != null) {
-                kinesisForwarder.forward("REMOVE", removed, null, table, region);
-            }
-        }
 
-        return removed;
+            JsonNode removed = items.remove(itemKey);
+            persistItems(storageKey);
+            LOG.debugv("Deleted item from {0}: key={1}", canonicalTableName, itemKey);
+
+            if (removed != null) {
+                if (streamService != null) {
+                    streamService.captureEvent(canonicalTableName, "REMOVE", removed, null, table, region);
+                }
+                if (kinesisForwarder != null) {
+                    kinesisForwarder.forward("REMOVE", removed, null, table, region);
+                }
+            }
+
+            return removed;
+        });
     }
 
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
@@ -347,7 +363,7 @@ public class DynamoDbService {
     public UpdateResult updateItem(String tableName, JsonNode key, JsonNode attributeUpdates,
                                     String updateExpression,
                                     JsonNode expressionAttrNames, JsonNode expressionAttrValues,
-                                    String returnValues, String conditionExpression, String region, 
+                                    String returnValues, String conditionExpression, String region,
                                     String returnValuesOnConditionCheckFailure) {
         String canonicalTableName = canonicalTableName(region, tableName);
         String storageKey = regionKey(region, canonicalTableName);
@@ -355,58 +371,61 @@ public class DynamoDbService {
                 .orElseThrow(() -> resourceNotFoundException(canonicalTableName));
 
         String itemKey = buildItemKey(table, key);
-        var items = itemsByTable.computeIfAbsent(storageKey, k -> new ConcurrentSkipListMap<>());
 
-        // Get existing item or create new one from key
-        JsonNode existing = items.get(itemKey);
+        return withItemLock(storageKey, itemKey, () -> {
+            var items = itemsByTable.computeIfAbsent(storageKey, k -> new ConcurrentSkipListMap<>());
 
-        if (conditionExpression != null) {
-            evaluateCondition(existing, conditionExpression, expressionAttrNames, expressionAttrValues, returnValuesOnConditionCheckFailure);
-        }
+            // Get existing item or create new one from key
+            JsonNode existing = items.get(itemKey);
 
-        ObjectNode item;
-        if (existing != null) {
-            item = existing.deepCopy();
-        } else {
-            item = key.deepCopy();
-        }
+            if (conditionExpression != null) {
+                evaluateCondition(existing, conditionExpression, expressionAttrNames, expressionAttrValues, returnValuesOnConditionCheckFailure);
+            }
 
-        // Apply UpdateExpression (modern format: "SET #n = :val, age = :age REMOVE attr")
-        if (updateExpression != null) {
-            applyUpdateExpression(item, updateExpression, expressionAttrNames, expressionAttrValues);
-        }
-        // Apply attribute updates (legacy format: AttributeUpdates)
-        else if (attributeUpdates != null && attributeUpdates.isObject()) {
-            Iterator<Map.Entry<String, JsonNode>> fields = attributeUpdates.fields();
-            while (fields.hasNext()) {
-                var entry = fields.next();
-                String attrName = entry.getKey();
-                JsonNode update = entry.getValue();
-                String action = update.has("Action") ? update.get("Action").asText() : "PUT";
-                JsonNode value = update.get("Value");
+            ObjectNode item;
+            if (existing != null) {
+                item = existing.deepCopy();
+            } else {
+                item = key.deepCopy();
+            }
 
-                switch (action) {
-                    case "PUT" -> { if (value != null) item.set(attrName, value); }
-                    case "DELETE" -> item.remove(attrName);
-                    case "ADD" -> {
-                        // Simple ADD for numeric values
-                        if (value != null) item.set(attrName, value);
+            // Apply UpdateExpression (modern format: "SET #n = :val, age = :age REMOVE attr")
+            if (updateExpression != null) {
+                applyUpdateExpression(item, updateExpression, expressionAttrNames, expressionAttrValues);
+            }
+            // Apply attribute updates (legacy format: AttributeUpdates)
+            else if (attributeUpdates != null && attributeUpdates.isObject()) {
+                Iterator<Map.Entry<String, JsonNode>> fields = attributeUpdates.fields();
+                while (fields.hasNext()) {
+                    var entry = fields.next();
+                    String attrName = entry.getKey();
+                    JsonNode update = entry.getValue();
+                    String action = update.has("Action") ? update.get("Action").asText() : "PUT";
+                    JsonNode value = update.get("Value");
+
+                    switch (action) {
+                        case "PUT" -> { if (value != null) item.set(attrName, value); }
+                        case "DELETE" -> item.remove(attrName);
+                        case "ADD" -> {
+                            // Simple ADD for numeric values
+                            if (value != null) item.set(attrName, value);
+                        }
                     }
                 }
             }
-        }
 
-        items.put(itemKey, item);
-        persistItems(storageKey);
+            items.put(itemKey, item);
+            persistItems(storageKey);
 
-        if (streamService != null) {
-            streamService.captureEvent(canonicalTableName, "MODIFY", existing, item, table, region);
-        }
-        if (kinesisForwarder != null) {
-            kinesisForwarder.forward("MODIFY", existing, item, table, region);
-        }
+            if (streamService != null) {
+                streamService.captureEvent(canonicalTableName, "MODIFY", existing, item, table, region);
+            }
+            if (kinesisForwarder != null) {
+                kinesisForwarder.forward("MODIFY", existing, item, table, region);
+            }
 
-        return new UpdateResult(item, existing);
+            return new UpdateResult(item, existing);
+        });
     }
 
     public QueryResult query(String tableName, JsonNode keyConditions,
@@ -664,49 +683,111 @@ public class DynamoDbService {
     // --- Transact Operations ---
 
     public void transactWriteItems(List<JsonNode> transactItems, String region) {
-        // First pass: evaluate all conditions and collect failures
-        List<String> cancellationReasons = new ArrayList<>();
-        boolean hasFailed = false;
-
+        // Acquire every participant's item lock in a deterministic (storageKey, itemKey)
+        // order before evaluating conditions or applying writes. Total-ordered acquisition
+        // prevents deadlock across concurrent transactions; ReentrantLock lets the inner
+        // putItem/updateItem/deleteItem calls re-enter the same lock for free.
+        //
+        // Ordering uses a tuple comparator — not a delimited string — so user-supplied
+        // bytes in an item's PK/SK value cannot collide two distinct participants
+        // into the same ordering key.
+        TreeMap<TransactParticipant, ReentrantLock> toAcquire = new TreeMap<>(PARTICIPANT_ORDER);
         for (JsonNode transactItem : transactItems) {
-            String failReason = evaluateTransactCondition(transactItem, region);
-            if (failReason != null) {
-                hasFailed = true;
-                cancellationReasons.add(failReason);
-            } else {
-                cancellationReasons.add("");
+            TransactParticipant p = resolveParticipant(transactItem, region);
+            if (p == null) continue;
+            toAcquire.putIfAbsent(p, lockFor(p.storageKey, p.itemKey));
+        }
+
+        List<ReentrantLock> acquired = new ArrayList<>(toAcquire.size());
+        try {
+            for (ReentrantLock lock : toAcquire.values()) {
+                lock.lock();
+                acquired.add(lock);
+            }
+
+            // First pass: evaluate all conditions and collect failures.
+            List<String> cancellationReasons = new ArrayList<>();
+            boolean hasFailed = false;
+            for (JsonNode transactItem : transactItems) {
+                String failReason = evaluateTransactCondition(transactItem, region);
+                if (failReason != null) {
+                    hasFailed = true;
+                    cancellationReasons.add(failReason);
+                } else {
+                    cancellationReasons.add("");
+                }
+            }
+
+            if (hasFailed) {
+                throw new TransactionCanceledException(cancellationReasons);
+            }
+
+            // Second pass: apply all writes. Inner methods re-acquire their own locks,
+            // which is a no-op thanks to ReentrantLock.
+            for (JsonNode transactItem : transactItems) {
+                if (transactItem.has("Put")) {
+                    JsonNode put = transactItem.get("Put");
+                    String tableName = put.path("TableName").asText();
+                    JsonNode item = put.get("Item");
+                    putItem(tableName, item, region);
+                } else if (transactItem.has("Delete")) {
+                    JsonNode del = transactItem.get("Delete");
+                    String tableName = del.path("TableName").asText();
+                    JsonNode key = del.get("Key");
+                    deleteItem(tableName, key, region);
+                } else if (transactItem.has("Update")) {
+                    JsonNode upd = transactItem.get("Update");
+                    String tableName = upd.path("TableName").asText();
+                    JsonNode key = upd.get("Key");
+                    String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
+                    JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
+                    JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
+                    //there is no ConditionExpression, so setting returnValuesOnConditionCheckFailure = "NONE"
+                    updateItem(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
+                               "NONE", null, region, "NONE");
+                }
+                // ConditionCheck-only items are handled in the first pass only
+            }
+        } finally {
+            for (int i = acquired.size() - 1; i >= 0; i--) {
+                acquired.get(i).unlock();
             }
         }
+    }
 
-        if (hasFailed) {
-            throw new TransactionCanceledException(cancellationReasons);
+    private record TransactParticipant(String storageKey, String itemKey) {}
+
+    private static final Comparator<TransactParticipant> PARTICIPANT_ORDER =
+            Comparator.comparing(TransactParticipant::storageKey)
+                    .thenComparing(TransactParticipant::itemKey);
+
+    private TransactParticipant resolveParticipant(JsonNode transactItem, String region) {
+        JsonNode target;
+        boolean isPut = false;
+        if (transactItem.has("Put")) {
+            target = transactItem.get("Put");
+            isPut = true;
+        } else if (transactItem.has("Delete")) {
+            target = transactItem.get("Delete");
+        } else if (transactItem.has("Update")) {
+            target = transactItem.get("Update");
+        } else if (transactItem.has("ConditionCheck")) {
+            target = transactItem.get("ConditionCheck");
+        } else {
+            return null;
         }
 
-        // Second pass: apply all writes
-        for (JsonNode transactItem : transactItems) {
-            if (transactItem.has("Put")) {
-                JsonNode put = transactItem.get("Put");
-                String tableName = put.path("TableName").asText();
-                JsonNode item = put.get("Item");
-                putItem(tableName, item, region);
-            } else if (transactItem.has("Delete")) {
-                JsonNode del = transactItem.get("Delete");
-                String tableName = del.path("TableName").asText();
-                JsonNode key = del.get("Key");
-                deleteItem(tableName, key, region);
-            } else if (transactItem.has("Update")) {
-                JsonNode upd = transactItem.get("Update");
-                String tableName = upd.path("TableName").asText();
-                JsonNode key = upd.get("Key");
-                String updateExpression = upd.has("UpdateExpression") ? upd.get("UpdateExpression").asText() : null;
-                JsonNode exprAttrNames = upd.has("ExpressionAttributeNames") ? upd.get("ExpressionAttributeNames") : null;
-                JsonNode exprAttrValues = upd.has("ExpressionAttributeValues") ? upd.get("ExpressionAttributeValues") : null;
-                //there is no ConditionExpression, so setting returnValuesOnConditionCheckFailure = "NONE"
-                updateItem(tableName, key, null, updateExpression, exprAttrNames, exprAttrValues,
-                           "NONE", null, region, "NONE");
-            }
-            // ConditionCheck-only items are handled in the first pass only
+        String tableName = canonicalTableName(region, target.path("TableName").asText());
+        JsonNode keyOrItem = isPut ? target.get("Item") : target.get("Key");
+        if (keyOrItem == null) {
+            return null;
         }
+
+        String storageKey = regionKey(region, tableName);
+        TableDefinition table = tableStore.get(storageKey)
+                .orElseThrow(() -> resourceNotFoundException(tableName));
+        String itemKey = buildItemKey(table, keyOrItem);
+        return new TransactParticipant(storageKey, itemKey);
     }
 
     private String evaluateTransactCondition(JsonNode transactItem, String region) {
@@ -1631,6 +1712,32 @@ public class DynamoDbService {
 
     private static String regionKey(String region, String tableName) {
         return region + "::" + tableName;
+    }
+
+    private ReentrantLock lockFor(String storageKey, String itemKey) {
+        return itemLocks
+                .computeIfAbsent(storageKey, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(itemKey, k -> new ReentrantLock());
+    }
+
+    private void withItemLock(String storageKey, String itemKey, Runnable body) {
+        ReentrantLock lock = lockFor(storageKey, itemKey);
+        lock.lock();
+        try {
+            body.run();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private <T> T withItemLock(String storageKey, String itemKey, Supplier<T> body) {
+        ReentrantLock lock = lockFor(storageKey, itemKey);
+        lock.lock();
+        try {
+            return body.get();
+        } finally {
+            lock.unlock();
+        }
     }
 
     String buildItemKey(TableDefinition table, JsonNode item) {
