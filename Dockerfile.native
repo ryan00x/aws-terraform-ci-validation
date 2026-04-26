@@ -45,7 +45,6 @@ FROM quay.io/quarkus/quarkus-micro-image:2.0
 
 USER root
 WORKDIR /app
-.
 COPY --from=tools /toolsroot/ /
 
 RUN useradd -r -u 1001 -g root -d /app -s /sbin/nologin floci
