@@ -208,7 +208,15 @@ public class ResolvedServiceCatalog {
                 descriptor("elasticloadbalancing", "elbv2", config.services().elbv2().enabled(), true,
                         "elbv2", config.storage().mode(), 5000L, AwsNamespaces.ELB_V2, ServiceProtocol.QUERY,
                         protocols(ServiceProtocol.QUERY),
-                        Set.of(), Set.of("elasticloadbalancing"), Set.of(), Set.of())
+                        Set.of(), Set.of("elasticloadbalancing"), Set.of(), Set.of()),
+                descriptor("codebuild", "codebuild", config.services().codebuild().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("CodeBuild_20161006."), Set.of("codebuild"), Set.of(), Set.of()),
+                descriptor("codedeploy", "codedeploy", config.services().codedeploy().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("CodeDeploy_20141006."), Set.of("codedeploy"), Set.of(), Set.of())
         ));
     }
 

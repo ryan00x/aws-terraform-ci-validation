@@ -41,6 +41,8 @@ import software.amazon.awssdk.services.acm.AcmClient;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ecr.EcrClient;
 import software.amazon.awssdk.services.pipes.PipesClient;
+import software.amazon.awssdk.services.codebuild.CodeBuildClient;
+import software.amazon.awssdk.services.codedeploy.CodeDeployClient;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.eks.EksClient;
 import software.amazon.awssdk.services.scheduler.SchedulerClient;
@@ -529,6 +531,22 @@ public final class TestFixtures {
 
     public static ElasticLoadBalancingV2Client elbV2Client() {
         return ElasticLoadBalancingV2Client.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static CodeBuildClient codeBuildClient() {
+        return CodeBuildClient.builder()
+                .endpointOverride(ENDPOINT)
+                .region(REGION)
+                .credentialsProvider(CREDENTIALS)
+                .build();
+    }
+
+    public static CodeDeployClient codeDeployClient() {
+        return CodeDeployClient.builder()
                 .endpointOverride(ENDPOINT)
                 .region(REGION)
                 .credentialsProvider(CREDENTIALS)

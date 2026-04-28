@@ -52,7 +52,9 @@ class HealthControllerIntegrationTest {
                 "bedrock-runtime": "running",
                 "eks": "running",
                 "pipes": "running",
-                "elasticloadbalancing": "running"
+                "elasticloadbalancing": "running",
+                "codebuild": "running",
+                "codedeploy": "running"
               },
               "edition": "floci-always-free",
               "version": "dev"

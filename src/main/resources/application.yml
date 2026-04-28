@@ -219,3 +219,7 @@ floci:
       keep-running-on-shutdown: false
     elbv2:
       enabled: true
+    codebuild:
+      enabled: true
+    codedeploy:
+      enabled: true

@@ -270,6 +270,18 @@ public interface EmulatorConfig {
         EksServiceConfig eks();
         PipesServiceConfig pipes();
         ElbV2ServiceConfig elbv2();
+        CodeBuildServiceConfig codebuild();
+        CodeDeployServiceConfig codedeploy();
+    }
+
+    interface CodeBuildServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface CodeDeployServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface SsmServiceConfig {
