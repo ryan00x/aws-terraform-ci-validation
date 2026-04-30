@@ -14,7 +14,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [SQS](sqs.md) | `POST /` with `Action=` param | Query / JSON | 20 |
 | [SNS](sns.md) | `POST /` with `Action=` param | Query / JSON | 17 |
 | [S3](s3.md) | `/{bucket}/{key}` | REST XML | 58 |
-| [DynamoDB](dynamodb.md) | `POST /` + `X-Amz-Target: DynamoDB_20120810.*` | JSON 1.1 | 20 |
+| [DynamoDB](dynamodb.md) | `POST /` + `X-Amz-Target: DynamoDB_20120810.*` | JSON 1.1 | 28 |
 | [DynamoDB Streams](dynamodb.md#streams) | `POST /` + `X-Amz-Target: DynamoDBStreams_20120810.*` | JSON 1.1 | 4 |
 | [Lambda](lambda.md) | `/2015-03-31/functions/...` | REST JSON | 30 |
 | [API Gateway v1](api-gateway.md) | `/restapis/...` | REST JSON | 62 |
@@ -26,7 +26,7 @@ Operation counts are exact. For dispatch-table services (Query and JSON 1.1) eac
 | [Kinesis](kinesis.md) | `POST /` + `X-Amz-Target: Kinesis_20131202.*` | JSON 1.1 | 24 |
 | [Secrets Manager](secrets-manager.md) | `POST /` + `X-Amz-Target: secretsmanager.*` | JSON 1.1 | 16 |
 | [Step Functions](step-functions.md) | `POST /` + `X-Amz-Target: AmazonStatesService.*` | JSON 1.1 | 18 |
-| [CloudFormation](cloudformation.md) | `POST /` with `Action=` param | Query | 18 |
+| [CloudFormation](cloudformation.md) | `POST /` with `Action=` param | Query | 19 |
 | [EventBridge](eventbridge.md) | `POST /` + `X-Amz-Target: AmazonEventBridge.*` | JSON 1.1 | 16 |
 | [EventBridge Scheduler](scheduler.md) | `/schedules/*`, `/schedule-groups/*` | REST JSON | 9 |
 | [CloudWatch Logs](cloudwatch.md) | `POST /` + `X-Amz-Target: Logs.*` | JSON 1.1 | 17 |
