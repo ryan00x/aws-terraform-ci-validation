@@ -302,6 +302,7 @@ public class AwsQueryController {
             "GetIdentityDkimAttributes",
             "CreateTemplate", "UpdateTemplate", "GetTemplate", "DeleteTemplate",
             "ListTemplates", "SendTemplatedEmail", "SendBulkTemplatedEmail",
+            "TestRenderTemplate",
             "CreateConfigurationSet", "DescribeConfigurationSet",
             "ListConfigurationSets", "DeleteConfigurationSet"
     );
