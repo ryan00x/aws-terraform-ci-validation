@@ -530,7 +530,7 @@ Initial public release of Floci — a fast, free, open-source local AWS emulator
 ---
 
 [Unreleased]: https://github.com/floci-io/floci/compare/1.5.12...HEAD
-[1.5.11]: https://github.com/floci-io/floci/compare/1.5.11...1.5.12
+[1.5.12]: https://github.com/floci-io/floci/compare/1.5.11...1.5.12
 [1.5.11]: https://github.com/floci-io/floci/compare/1.5.10...1.5.11
 [1.5.10]: https://github.com/floci-io/floci/compare/1.5.9...1.5.10
 [1.5.9]: https://github.com/floci-io/floci/compare/1.5.8...1.5.9
