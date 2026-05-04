@@ -16,6 +16,7 @@
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.version>3.34.6</quarkus.platform.version>
+        <apicurio.version>2.6.9.Final</apicurio.version>
     </properties>
 
     <dependencyManagement>
@@ -165,6 +166,32 @@
             <groupId>io.swagger.parser.v3</groupId>
             <artifactId>swagger-parser</artifactId>
             <version>2.1.41</version>
+        </dependency>
+
+        <!-- Glue Schema Registry: Apicurio format utilities (parsing, canonicalization, compatibility) -->
+        <dependency>
+            <groupId>io.apicurio</groupId>
+            <artifactId>apicurio-registry-schema-util-avro</artifactId>
+            <version>${apicurio.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.apicurio</groupId>
+            <artifactId>apicurio-registry-schema-util-json</artifactId>
+            <version>${apicurio.version}</version>
+            <exclusions>
+                <!-- Apicurio's logging library brings a Servlet-based audit filter that
+                     fails to wire under Quarkus REST (Vert.x). Schema-util code does not
+                     reference it. -->
+                <exclusion>
+                    <groupId>io.apicurio</groupId>
+                    <artifactId>apicurio-common-app-components-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.apicurio</groupId>
+            <artifactId>apicurio-registry-schema-util-protobuf</artifactId>
+            <version>${apicurio.version}</version>
         </dependency>
 
         <!-- Testing -->

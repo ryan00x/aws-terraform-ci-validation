@@ -35,6 +35,10 @@ Floci emulates 41 AWS services. See the [Services Overview](services/index.md) f
 | STS | Query |
 | ElastiCache (Redis / Valkey) | Query + RESP proxy |
 | RDS (PostgreSQL / MySQL) | Query + wire proxy |
+| MSK (Kafka / Redpanda) | REST JSON + Kafka |
+| Athena | JSON 1.1 |
+| Glue Data Catalog + Schema Registry | JSON 1.1 |
+| Data Firehose | JSON 1.1 |
 | ECS | JSON 1.1 |
 | EC2 | EC2 Query |
 | ACM | JSON 1.1 |
