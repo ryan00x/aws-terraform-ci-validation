@@ -29,6 +29,8 @@ quarkus:
       - --initialize-at-run-time=io.github.hectorvent.floci.services.acm.AcmService
       - --initialize-at-run-time=io.github.hectorvent.floci.services.acm.CertificateGenerator
       - --initialize-at-run-time=io.github.hectorvent.floci.services.cognito.CognitoSrpHelper
+      - --initialize-at-run-time=io.github.hectorvent.floci.services.ses.SesService
+
 
 floci:
   port: 4566
