@@ -102,6 +102,13 @@ nav:
     - EC2: services/ec2.md
     - AppConfig: services/appconfig.md
     - Bedrock Runtime: services/bedrock-runtime.md
+    - ELB v2: services/elb.md
+    - Auto Scaling: services/autoscaling.md
+    - CodeBuild: services/codebuild.md
+    - CodeDeploy: services/codedeploy.md
+    - AWS Backup: services/backup.md
+    - Route53: services/route53.md
+    - Transfer Family: services/transfer.md
   - Testcontainers:
     - Overview: testcontainers/index.md
     - Java: testcontainers/java.md

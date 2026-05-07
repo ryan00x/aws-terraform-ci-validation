@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.13] - 2026-05-07
+
 ### Added
 
 - **backup:** AWS Backup Phase 1 — vaults, plans, selections, on-demand jobs with simulated CREATED→RUNNING→COMPLETED lifecycle, recovery points, tagging via `SharedTagsController`, and `GetSupportedResourceTypes`
@@ -547,7 +549,8 @@ Initial public release of Floci — a fast, free, open-source local AWS emulator
 
 ---
 
-[Unreleased]: https://github.com/floci-io/floci/compare/1.5.12...HEAD
+[Unreleased]: https://github.com/floci-io/floci/compare/1.5.13...HEAD
+[1.5.13]: https://github.com/floci-io/floci/compare/1.5.12...1.5.13
 [1.5.12]: https://github.com/floci-io/floci/compare/1.5.11...1.5.12
 [1.5.11]: https://github.com/floci-io/floci/compare/1.5.10...1.5.11
 [1.5.10]: https://github.com/floci-io/floci/compare/1.5.9...1.5.10
