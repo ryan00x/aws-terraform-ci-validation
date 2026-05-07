@@ -220,7 +220,11 @@ public class ResolvedServiceCatalog {
                 descriptor("autoscaling", "autoscaling", config.services().autoscaling().enabled(), true,
                         "autoscaling", config.storage().mode(), 5000L, AwsNamespaces.AUTOSCALING, ServiceProtocol.QUERY,
                         protocols(ServiceProtocol.QUERY),
-                        Set.of(), Set.of("autoscaling"), Set.of(), Set.of())
+                        Set.of(), Set.of("autoscaling"), Set.of(), Set.of()),
+                descriptor("ec2messages", "ec2messages", config.services().ssm().enabled(), false,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("AmazonSSMMessageDeliveryService."), Set.of("ec2messages"), Set.of(), Set.of())
         ));
     }
 

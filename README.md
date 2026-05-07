@@ -72,6 +72,7 @@
 | CodeBuild (real Docker build execution, S3 artifacts, CloudWatch logs) | ✅ | ❌ |
 | CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
 | Auto Scaling (groups, launch configs, reconciler, ELB v2 integration) | ✅ | ❌ |
+| SSM Run Command (SendCommand + real agent polling via ec2messages) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -208,6 +209,7 @@ All default images are configurable via environment variables, useful for pinnin
 | Service | How it works | Notable features |
 |---|---|---|
 | **SSM Parameter Store** | In-process | Version history, labels, SecureString, tagging |
+| **SSM Run Command** | In-process | `SendCommand`, `GetCommandInvocation`, `ListCommands`, `CancelCommand`; `DescribeInstanceInformation`; `ec2messages` polling protocol so the real `amazon-ssm-agent` running inside EC2 containers can register, receive commands, and report output |
 | **SQS** | In-process | Standard & FIFO, DLQ, visibility timeout, batch, tagging |
 | **SNS** | In-process | Topics, subscriptions, SQS / Lambda / HTTP delivery, tagging |
 | **S3** | In-process | Versioning, multipart upload, pre-signed URLs, Object Lock, event notifications |
@@ -254,7 +256,7 @@ All default images are configurable via environment variables, useful for pinnin
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**42 AWS services supported.**
+**43 AWS services supported.**
 
 ## Persistence & Storage Modes
 
