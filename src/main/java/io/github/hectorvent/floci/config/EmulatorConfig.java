@@ -273,6 +273,24 @@ public interface EmulatorConfig {
         CodeBuildServiceConfig codebuild();
         CodeDeployServiceConfig codedeploy();
         AutoScalingServiceConfig autoscaling();
+        Route53ServiceConfig route53();
+    }
+
+    interface Route53ServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("ns-1.awsdns-01.org")
+        String defaultNameserver1();
+
+        @WithDefault("ns-2.awsdns-02.net")
+        String defaultNameserver2();
+
+        @WithDefault("ns-3.awsdns-03.com")
+        String defaultNameserver3();
+
+        @WithDefault("ns-4.awsdns-04.co.uk")
+        String defaultNameserver4();
     }
 
     interface AutoScalingServiceConfig {

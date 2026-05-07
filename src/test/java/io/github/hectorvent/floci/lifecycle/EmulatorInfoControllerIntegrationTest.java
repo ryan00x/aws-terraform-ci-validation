@@ -57,7 +57,8 @@ class EmulatorInfoControllerIntegrationTest {
               "elasticloadbalancing": "running",
               "codebuild": "running",
               "codedeploy": "running",
-              "autoscaling": "running"
+              "autoscaling": "running",
+              "route53": "running"
             }
             """;
 
