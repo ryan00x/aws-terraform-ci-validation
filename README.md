@@ -73,6 +73,7 @@
 | CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
 | Auto Scaling (groups, launch configs, reconciler, ELB v2 integration) | ✅ | ❌ |
 | SSM Run Command (SendCommand + real agent polling via ec2messages) | ✅ | ❌ |
+| Transfer Family (SFTP server management, users, SSH keys) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -253,12 +254,13 @@ All default images are configurable via environment variables, useful for pinnin
 | **Auto Scaling** | In-process + **background reconciler** | Launch configurations, auto scaling groups with min/max/desired capacity; background loop (10 s) calls `RunInstances` / `TerminateInstances` to meet desired capacity; lifecycle hooks, scaling policies, ELB v2 target group auto-registration |
 | **AWS Backup** | In-process | Vaults, backup plans with rules, resource selections, on-demand jobs with simulated lifecycle (CREATED → RUNNING → COMPLETED), recovery points, tagging |
 | **Route53** | In-process | Hosted zones with auto-created SOA + NS records, resource record sets (CREATE/UPSERT/DELETE with atomic validation), change tracking (always INSYNC), health checks, and per-resource tagging |
+| **Transfer Family** | In-process | Managed SFTP server lifecycle (create, start, stop, delete), user management, SSH public key import, tagging; server state simulated in-process |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EC2, EKS, OpenSearch, and CodeBuild** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**43 AWS services supported.**
+**45 AWS services supported.**
 
 ## Persistence & Storage Modes
 

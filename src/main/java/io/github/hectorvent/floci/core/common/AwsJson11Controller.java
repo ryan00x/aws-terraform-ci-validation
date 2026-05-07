@@ -7,6 +7,7 @@ import io.github.hectorvent.floci.services.athena.AthenaJsonHandler;
 import io.github.hectorvent.floci.services.codebuild.CodeBuildJsonHandler;
 import io.github.hectorvent.floci.services.codedeploy.CodeDeployJsonHandler;
 import io.github.hectorvent.floci.services.ecr.EcrJsonHandler;
+import io.github.hectorvent.floci.services.transfer.TransferHandler;
 import io.github.hectorvent.floci.services.ecs.EcsJsonHandler;
 import io.github.hectorvent.floci.services.firehose.FirehoseJsonHandler;
 import io.github.hectorvent.floci.services.glue.GlueJsonHandler;
@@ -62,6 +63,7 @@ public class AwsJson11Controller {
     private final CodeBuildJsonHandler codeBuildJsonHandler;
     private final CodeDeployJsonHandler codeDeployJsonHandler;
     private final Ec2MessagesJsonHandler ec2MessagesJsonHandler;
+    private final TransferHandler transferHandler;
 
     @Inject
     public AwsJson11Controller(ObjectMapper objectMapper, ResolvedServiceCatalog catalog,
@@ -79,7 +81,8 @@ public class AwsJson11Controller {
                                ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler,
                                CodeBuildJsonHandler codeBuildJsonHandler,
                                CodeDeployJsonHandler codeDeployJsonHandler,
-                               Ec2MessagesJsonHandler ec2MessagesJsonHandler) {
+                               Ec2MessagesJsonHandler ec2MessagesJsonHandler,
+                               TransferHandler transferHandler) {
         this.objectMapper = objectMapper;
         this.catalog = catalog;
         this.regionResolver = regionResolver;
@@ -101,6 +104,7 @@ public class AwsJson11Controller {
         this.codeBuildJsonHandler = codeBuildJsonHandler;
         this.codeDeployJsonHandler = codeDeployJsonHandler;
         this.ec2MessagesJsonHandler = ec2MessagesJsonHandler;
+        this.transferHandler = transferHandler;
     }
 
     @POST
@@ -147,6 +151,7 @@ public class AwsJson11Controller {
                 case "codebuild" -> codeBuildJsonHandler.handle(action, request, region, regionResolver.getAccountId());
                 case "codedeploy" -> codeDeployJsonHandler.handle(action, request, region);
                 case "ec2messages" -> ec2MessagesJsonHandler.handle(action, request, region);
+                case "transfer" -> transferHandler.handle(action, request, region);
                 default -> null;
             };
             // catalog.matchTarget is protocol-agnostic: a JSON 1.0 target

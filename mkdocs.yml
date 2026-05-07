@@ -102,6 +102,7 @@ nav:
     - EC2: services/ec2.md
     - AppConfig: services/appconfig.md
     - Bedrock Runtime: services/bedrock-runtime.md
+    - Transfer Family: services/transfer.md
   - Testcontainers:
     - Overview: testcontainers/index.md
     - Java: testcontainers/java.md
