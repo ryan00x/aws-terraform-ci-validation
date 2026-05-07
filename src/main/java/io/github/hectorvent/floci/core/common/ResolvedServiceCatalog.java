@@ -232,14 +232,14 @@ public class ResolvedServiceCatalog {
                         null, null, 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
                         Set.of("AmazonSSMMessageDeliveryService."), Set.of("ec2messages"), Set.of(), Set.of()),
-                descriptor("route53", "route53", config.services().route53().enabled(), true,
-                        "route53", config.storage().mode(), 5000L, null, ServiceProtocol.REST_XML,
-                        protocols(ServiceProtocol.REST_XML),
-                        Set.of(), Set.of("route53"), Set.of(), Set.of(Route53Controller.class)),
                 descriptor("transfer", "transfer", config.services().transfer().enabled(), true,
                         "transfer", config.storage().mode(), 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
-                        Set.of("TransferService."), Set.of("transfer"), Set.of(), Set.of())
+                        Set.of("TransferService."), Set.of("transfer"), Set.of(), Set.of()),
+                descriptor("route53", "route53", config.services().route53().enabled(), true,
+                        "route53", config.storage().mode(), 5000L, null, ServiceProtocol.REST_XML,
+                        protocols(ServiceProtocol.REST_XML),
+                        Set.of(), Set.of("route53"), Set.of(), Set.of(Route53Controller.class))
         ));
     }
 

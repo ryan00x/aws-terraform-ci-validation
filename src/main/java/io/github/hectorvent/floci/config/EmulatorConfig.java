@@ -286,6 +286,11 @@ public interface EmulatorConfig {
         TransferServiceConfig transfer();
     }
 
+    interface TransferServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
     interface BackupServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -309,11 +314,6 @@ public interface EmulatorConfig {
 
         @WithDefault("ns-4.awsdns-04.co.uk")
         String defaultNameserver4();
-    }
-
-    interface TransferServiceConfig {
-        @WithDefault("true")
-        boolean enabled();
     }
 
     interface AutoScalingServiceConfig {

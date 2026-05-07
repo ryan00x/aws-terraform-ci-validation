@@ -4,44 +4,46 @@
 **Endpoint:** `http://localhost:4566/`  
 **X-Amz-Target prefix:** `TransferService.`
 
+AWS Transfer Family managed file transfer server management. This implementation covers the management-plane API for server and user lifecycle, SSH public key management, and tagging. Actual SFTP/FTP protocol handling is out of scope — server state is simulated in-process.
+
 ## Supported Actions
 
 ### Servers
 
 | Action | Description |
 |---|---|
-| `CreateServer` | Create an SFTP/FTP/FTPS server |
-| `DescribeServer` | Get server details and state |
-| `UpdateServer` | Update server configuration |
-| `DeleteServer` | Delete a server |
-| `ListServers` | List all servers |
-| `StartServer` | Start a stopped server (sets state to `ONLINE`) |
-| `StopServer` | Stop a running server (sets state to `OFFLINE`) |
+| `CreateServer` | Create a managed file transfer server |
+| `DescribeServer` | Get server metadata and configuration |
+| `UpdateServer` | Update protocols, endpoint type, logging role, security policy |
+| `DeleteServer` | Delete a server (must be in `OFFLINE` state) |
+| `ListServers` | Paginated list of servers |
+| `StartServer` | Transition server from `OFFLINE` to `ONLINE` |
+| `StopServer` | Transition server from `ONLINE` to `OFFLINE` |
 
 ### Users
 
 | Action | Description |
 |---|---|
-| `CreateUser` | Create a user on a server |
-| `DescribeUser` | Get user details and SSH keys |
-| `UpdateUser` | Update user properties (home directory, role, policy) |
-| `DeleteUser` | Delete a user and all associated SSH keys |
-| `ListUsers` | List all users for a server |
+| `CreateUser` | Associate a user with a server |
+| `DescribeUser` | Get user configuration and SSH keys |
+| `UpdateUser` | Update role, home directory, or home directory mappings |
+| `DeleteUser` | Remove a user from a server |
+| `ListUsers` | Paginated list of users on a server |
 
 ### SSH Public Keys
 
 | Action | Description |
 |---|---|
-| `ImportSshPublicKey` | Import an SSH public key for a user |
+| `ImportSshPublicKey` | Attach an SSH public key to a user |
 | `DeleteSshPublicKey` | Remove an SSH public key from a user |
 
 ### Tagging
 
 | Action | Description |
 |---|---|
-| `TagResource` | Add tags to a server or user |
-| `UntagResource` | Remove tags from a resource |
-| `ListTagsForResource` | List tags on a resource |
+| `TagResource` | Add or update tags on a server or user |
+| `UntagResource` | Remove tags from a server or user |
+| `ListTagsForResource` | List tags for a server or user |
 
 ## Configuration
 
@@ -58,37 +60,59 @@ floci:
 
 ## ARN Format
 
-| Resource | ARN |
-|---|---|
-| Server | `arn:aws:transfer:{region}:{account}:server/{serverId}` |
-| User | `arn:aws:transfer:{region}:{account}:user/{serverId}/{userName}` |
+```
+arn:aws:transfer:{region}:{accountId}:server/{serverId}
+arn:aws:transfer:{region}:{accountId}:user/{serverId}/{userName}
+```
+
+Server IDs have the format `s-` followed by 17 lowercase alphanumeric characters (e.g. `s-01234567890abcdef`).
 
 ## Example Usage
 
 ```bash
+export AWS_ENDPOINT_URL=http://localhost:4566
+
 # Create a server
-aws --endpoint-url http://localhost:4566 transfer create-server \
-  --protocols SFTP
+aws transfer create-server \
+  --protocols SFTP \
+  --endpoint-type PUBLIC
+
+# List servers
+aws transfer list-servers
+
+# Stop a server (must be ONLINE)
+aws transfer stop-server --server-id s-01234567890abcdef
+
+# Start a server (must be OFFLINE)
+aws transfer start-server --server-id s-01234567890abcdef
 
 # Create a user
-aws --endpoint-url http://localhost:4566 transfer create-user \
-  --server-id s-abc123 \
+aws transfer create-user \
+  --server-id s-01234567890abcdef \
   --user-name alice \
   --role arn:aws:iam::000000000000:role/transfer-role \
-  --home-directory /alice
+  --home-directory /uploads
 
 # Import an SSH public key
-aws --endpoint-url http://localhost:4566 transfer import-ssh-public-key \
-  --server-id s-abc123 \
+aws transfer import-ssh-public-key \
+  --server-id s-01234567890abcdef \
   --user-name alice \
   --ssh-public-key-body "ssh-rsa AAAA..."
 
-# List servers
-aws --endpoint-url http://localhost:4566 transfer list-servers
+# List users on a server
+aws transfer list-users --server-id s-01234567890abcdef
 
-# Start / stop a server
-aws --endpoint-url http://localhost:4566 transfer start-server --server-id s-abc123
-aws --endpoint-url http://localhost:4566 transfer stop-server  --server-id s-abc123
+# Tag a server
+aws transfer tag-resource \
+  --arn arn:aws:transfer:us-east-1:000000000000:server/s-01234567890abcdef \
+  --tags Key=env,Value=dev
+
+# Delete a user then the server
+aws transfer delete-user \
+  --server-id s-01234567890abcdef \
+  --user-name alice
+aws transfer stop-server --server-id s-01234567890abcdef
+aws transfer delete-server --server-id s-01234567890abcdef
 ```
 
 ## Notes

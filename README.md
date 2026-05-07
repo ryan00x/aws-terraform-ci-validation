@@ -73,6 +73,7 @@
 | CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
 | Auto Scaling (groups, launch configs, reconciler, ELB v2 integration) | ✅ | ❌ |
 | SSM Run Command (SendCommand + real agent polling via ec2messages) | ✅ | ❌ |
+| Transfer Family (SFTP server management, users, SSH keys) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
