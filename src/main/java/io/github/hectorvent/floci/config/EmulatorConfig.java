@@ -284,6 +284,7 @@ public interface EmulatorConfig {
         BackupServiceConfig backup();
         Route53ServiceConfig route53();
         TransferServiceConfig transfer();
+        TextractServiceConfig textract();
     }
 
     interface TransferServiceConfig {
@@ -615,6 +616,11 @@ public interface EmulatorConfig {
     }
 
     interface BedrockRuntimeServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface TextractServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
