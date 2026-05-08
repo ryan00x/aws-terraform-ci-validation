@@ -95,6 +95,14 @@ public interface EmulatorConfig {
         @WithDefault("${floci.storage.persistent-path}")
         String hostPersistentPath();
 
+        /**
+         * When {@code true}, named volumes are removed immediately after a child container stops
+         * on resource delete. In {@code memory} storage mode volumes are always removed regardless
+         * of this flag. Defaults to {@code false} to match real AWS behaviour (data survives delete).
+         */
+        @WithDefault("false")
+        boolean pruneVolumesOnDelete();
+
         WalConfig wal();
 
         ServiceStorageOverrides services();

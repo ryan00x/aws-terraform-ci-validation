@@ -3,7 +3,6 @@ package io.github.hectorvent.floci.services.rds;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
-import io.github.hectorvent.floci.core.common.ServiceConfigAccess;
 import io.github.hectorvent.floci.services.rds.model.DatabaseEngine;
 import io.github.hectorvent.floci.services.rds.model.DbCluster;
 import io.github.hectorvent.floci.services.rds.container.RdsContainerHandle;
@@ -43,11 +42,9 @@ class RdsServiceTest {
         when(rdsConfig.proxyBasePort()).thenReturn(7000);
         when(rdsConfig.proxyMaxPort()).thenReturn(7099);
 
-        ServiceConfigAccess serviceConfigAccess = mock(ServiceConfigAccess.class);
-        when(serviceConfigAccess.storageMode("rds")).thenReturn("in-memory");
-        rdsService = new RdsService(containerManager, proxyManager, regionResolver, config, serviceConfigAccess);
+        rdsService = new RdsService(containerManager, proxyManager, regionResolver, config);
 
-        when(containerManager.start(any(), any(), any(), any(), any(), any()))
+        when(containerManager.start(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new RdsContainerHandle("cont-id", "id", "localhost", 5432));
     }
 

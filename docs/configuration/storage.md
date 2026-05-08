@@ -70,9 +70,68 @@ Override the global mode for individual services via environment variables. When
 | `FLOCI_STORAGE_SERVICES_RDS_MODE`                               | global default | RDS storage mode (see note below)      |
 
 !!! note "RDS storage mode"
-    For RDS, `FLOCI_STORAGE_SERVICES_RDS_MODE` controls whether DB containers get a persistent Docker volume.
-    When set to `memory` (or when the global mode is `memory`), no volume is created and data is lost when the container stops.
-    Any other mode (`hybrid`, `persistent`, `wal`) causes a per-instance named volume (`floci-rds-<id>`) to be created and removed when the instance is deleted.
+    `FLOCI_STORAGE_SERVICES_RDS_MODE` controls Floci's own metadata persistence for RDS, not the
+    DB container volumes. In all modes, each DB instance or cluster gets a named Docker volume
+    (`floci-rds-{volumeId}`). In `memory` mode the volume is automatically removed when the
+    instance is deleted. In other modes the volume is retained unless
+    `FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE=true`.
+
+## Container Storage (RDS, OpenSearch, MSK, ECR)
+
+Services that spawn Docker containers (RDS, OpenSearch, MSK, ECR registry) need a volume for their
+data. Floci manages this automatically using **named Docker volumes** — no extra configuration
+required.
+
+### How it works
+
+Each resource gets a `volumeId` (a 6-character hex string, e.g. `a1b2c3`) generated at creation
+time and stored in the resource model. The container name and volume name both use this suffix:
+
+```
+floci-rds-a1b2c3         # RDS instance container and volume
+floci-opensearch-b4c5d6  # OpenSearch domain container and volume
+floci-msk-e7f8a9         # MSK cluster container and volume
+floci-ecr-registry-data  # ECR shared registry volume (singleton)
+```
+
+Volumes are labelled `floci=true` so you can manage them with standard Docker commands:
+
+```bash
+# List all Floci-managed volumes
+docker volume ls --filter label=floci=true
+
+# Remove all Floci-managed volumes (destructive)
+docker volume prune --filter label=floci=true
+```
+
+### Volume lifecycle
+
+By default volumes survive resource deletion, matching real AWS behavior.
+
+| `storage.mode` | Volume on resource delete |
+|---|---|
+| `memory` | **Always removed** — memory mode implies no persistence across restarts |
+| `persistent` / `hybrid` / `wal` | Retained (default) — remove with `FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE=true` |
+
+```bash
+# Remove named volumes immediately when a resource is deleted (useful in CI with persistent mode)
+FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE=true
+```
+
+### Host-path mode (advanced)
+
+Set `FLOCI_STORAGE_HOST_PERSISTENT_PATH` to an **absolute host path** to use bind mounts instead
+of named volumes. This is only needed when you must access the container data directly from the
+host filesystem.
+
+```bash
+FLOCI_STORAGE_HOST_PERSISTENT_PATH=/absolute/host/path/data
+```
+
+!!! warning
+    `FLOCI_STORAGE_HOST_PERSISTENT_PATH` must be an absolute path (starting with `/`). Volume
+    names and relative paths are not supported and will be silently ignored, falling back to
+    named-volume mode.
 
 ## Environment Variable Override
 

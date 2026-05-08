@@ -14,6 +14,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +62,7 @@ public class MskService {
         String clusterArn = AwsArnUtils.Arn.of("kafka", "us-east-1", "000000000000", "cluster/" + clusterName + "/" + java.util.UUID.randomUUID()).toString();
 
         MskCluster cluster = new MskCluster(clusterArn, clusterName);
+        cluster.setVolumeId(String.format("%06x", new SecureRandom().nextInt(0xFFFFFF)));
         
         if (config.services().msk().mock()) {
             cluster.setState(ClusterState.ACTIVE);
@@ -89,6 +91,7 @@ public class MskService {
         cluster.setState(ClusterState.DELETING);
         if (!config.services().msk().mock()) {
             redpandaManager.stopContainer(cluster);
+            redpandaManager.removeClusterStorage(cluster);
         }
         storage.delete(clusterArn);
     }

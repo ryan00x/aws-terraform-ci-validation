@@ -15,6 +15,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +87,7 @@ public class OpenSearchService {
         domain.setDeleted(false);
         domain.setEndpoint("");
         domain.setCreatedAt(Instant.now());
+        domain.setVolumeId(String.format("%06x", new SecureRandom().nextInt(0xFFFFFF)));
 
         if (clusterConfig != null) {
             domain.setClusterConfig(clusterConfig);
@@ -170,6 +172,7 @@ public class OpenSearchService {
         domain.setDeleted(true);
         if (!config.services().opensearch().mock()) {
             domainManager.stopDomain(domain);
+            domainManager.removeDomainStorage(domain);
         }
         domainStore.delete(domainName);
         LOG.infov("Deleted OpenSearch domain: {0}", domainName);

@@ -38,6 +38,9 @@ public class MskCluster {
     // Docker container ID for mock=false
     private String containerId;
 
+    // 6-char hex generated once at creation for stable, collision-free volume/container naming
+    private String volumeId;
+
     public MskCluster() {}
 
     public MskCluster(String clusterArn, String clusterName) {
@@ -79,4 +82,7 @@ public class MskCluster {
 
     public String getContainerId() { return containerId; }
     public void setContainerId(String containerId) { this.containerId = containerId; }
+
+    public String getVolumeId() { return volumeId; }
+    public void setVolumeId(String volumeId) { this.volumeId = volumeId; }
 }

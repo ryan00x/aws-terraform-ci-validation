@@ -52,6 +52,7 @@ floci:
     mode: memory
     persistent-path: ./data
     host-persistent-path: ./data
+    prune-volumes-on-delete: false
     wal:
       compaction-interval-ms: 30000
     services:

@@ -46,6 +46,9 @@ public class Domain {
     @JsonProperty("ContainerId")
     private String containerId;
 
+    @JsonProperty("VolumeId")
+    private String volumeId;
+
     @JsonProperty("CreatedAt")
     @JsonFormat(shape = JsonFormat.Shape.NUMBER)
     private Instant createdAt;
@@ -138,6 +141,14 @@ public class Domain {
 
     public void setContainerId(String containerId) {
         this.containerId = containerId;
+    }
+
+    public String getVolumeId() {
+        return volumeId;
+    }
+
+    public void setVolumeId(String volumeId) {
+        this.volumeId = volumeId;
     }
 
     public Instant getCreatedAt() {

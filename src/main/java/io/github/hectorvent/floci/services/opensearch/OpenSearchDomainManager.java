@@ -6,16 +6,15 @@ import io.github.hectorvent.floci.core.common.docker.ContainerDetector;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
 import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
+import io.github.hectorvent.floci.core.common.docker.ContainerStorageHelper;
 import io.github.hectorvent.floci.core.common.docker.PortAllocator;
 import io.github.hectorvent.floci.services.opensearch.model.Domain;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -58,34 +57,31 @@ public class OpenSearchDomainManager {
                 config.services().opensearch().proxyBasePort(),
                 config.services().opensearch().proxyMaxPort());
 
-        Path dataPath = Path.of(config.services().opensearch().dataPath(), domain.getDomainName());
-        try {
-            Files.createDirectories(dataPath);
-        } catch (IOException e) {
-            LOG.warnv("Could not create OpenSearch data directory {0}: {1}", dataPath, e.getMessage());
-        }
-
         lifecycleManager.removeIfExists(containerName);
 
-        String hostDataPath;
-        String hostPersistentPath = config.storage().hostPersistentPath();
-        if (hostPersistentPath.startsWith("/")) {
-            String dataPathStr = dataPath.toAbsolutePath().normalize().toString();
-            String persistentPathStr = Path.of(config.storage().persistentPath()).toAbsolutePath().normalize().toString();
-            hostDataPath = dataPathStr.replace(persistentPathStr, hostPersistentPath);
-        } else {
-            hostDataPath = "floci-opensearch-" + domain.getDomainName();
-        }
-
-        ContainerSpec spec = containerBuilder.newContainer(image)
+        ContainerBuilder.Builder specBuilder = containerBuilder.newContainer(image)
                 .withName(containerName)
                 .withEnv("discovery.type", "single-node")
                 .withEnv("DISABLE_SECURITY_PLUGIN", "true")
                 .withPortBinding(OPENSEARCH_PORT, hostPort)
-                .withBind(hostDataPath, "/usr/share/opensearch/data")
                 .withDockerNetwork(config.services().dockerNetwork())
-                .withLogRotation()
-                .build();
+                .withLogRotation();
+
+        if (ContainerStorageHelper.isNamedVolumeMode(config)) {
+            ContainerStorageHelper.applyStorage(specBuilder, lifecycleManager,
+                    "opensearch", domain.getVolumeId(), domain.getDomainName(),
+                    "/usr/share/opensearch/data");
+        } else {
+            // Legacy host-path mode: host-persistent-path is an absolute path
+            Path dataPath = Path.of(config.services().opensearch().dataPath(), domain.getDomainName());
+            ContainerStorageHelper.ensureHostDir(dataPath.toString());
+            String dataPathStr = dataPath.toAbsolutePath().normalize().toString();
+            String persistentPathStr = Path.of(config.storage().persistentPath()).toAbsolutePath().normalize().toString();
+            String hostDataPath = dataPathStr.replace(persistentPathStr, config.storage().hostPersistentPath());
+            specBuilder.withBind(hostDataPath, "/usr/share/opensearch/data");
+        }
+
+        ContainerSpec spec = specBuilder.build();
 
         ContainerInfo info = lifecycleManager.createAndStart(spec);
         domain.setContainerId(info.containerId());
@@ -133,5 +129,10 @@ public class OpenSearchDomainManager {
         }
         lifecycleManager.stopAndRemove(domain.getContainerId(), null);
         LOG.infov("Stopped OpenSearch container for domain {0}", domain.getDomainName());
+    }
+
+    public void removeDomainStorage(Domain domain) {
+        ContainerStorageHelper.removeStorage(config, lifecycleManager,
+                "opensearch", domain.getVolumeId(), domain.getDomainName());
     }
 }

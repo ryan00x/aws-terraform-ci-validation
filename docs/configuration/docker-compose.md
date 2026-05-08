@@ -178,6 +178,8 @@ All `application.yml` options can be overridden via environment variables using 
 | `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | AWS account ID used in ARNs |
 | `FLOCI_STORAGE_MODE` | `memory` | Global storage mode (`memory`, `persistent`, `hybrid`, `wal`) |
 | `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Directory for persistent storage |
+| `FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE` | `false` | Remove named volumes immediately on resource delete (`true` in memory mode always) |
+| `FLOCI_STORAGE_HOST_PERSISTENT_PATH` | _(none)_ | Absolute host path for container bind mounts (RDS, OpenSearch, MSK, ECR). When unset, Floci uses named Docker volumes automatically. |
 | `FLOCI_DOCKER_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket (shared by Lambda, RDS, ElastiCache) |
 | `FLOCI_DOCKER_DOCKER_CONFIG_PATH` | `` | Path to dir with Docker's config.json (e.g. `/root/.docker`) |
 | `FLOCI_DOCKER_REGISTRY_CREDENTIALS_0__SERVER` | `` | Registry hostname for explicit credential entry 0 |

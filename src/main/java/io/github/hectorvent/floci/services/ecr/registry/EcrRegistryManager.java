@@ -8,6 +8,7 @@ import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager;
 import io.github.hectorvent.floci.core.common.docker.ContainerLifecycleManager.ContainerInfo;
 import io.github.hectorvent.floci.core.common.docker.ContainerLogStreamer;
 import io.github.hectorvent.floci.core.common.docker.ContainerSpec;
+import io.github.hectorvent.floci.core.common.docker.ContainerStorageHelper;
 import io.github.hectorvent.floci.core.common.docker.PortAllocator;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
@@ -178,37 +179,23 @@ public class EcrRegistryManager {
     }
 
     private void addPersistenceMounts(ContainerBuilder.Builder specBuilder, List<String> env) {
-        String hostPersistentPath = config.storage().hostPersistentPath();
-        boolean inContainer = containerDetector.isRunningInContainer();
-        boolean isExplicitVolume = lifecycleManager.volumeExists(hostPersistentPath);
-        boolean isRelativeDefault = hostPersistentPath.startsWith(".");
-
-        if (inContainer && isRelativeDefault) {
-            // Zero-config fallback for in-container Floci
+        if (ContainerStorageHelper.isNamedVolumeMode(config)) {
+            lifecycleManager.ensureVolume(NAMED_VOLUME);
             specBuilder.withNamedVolume(NAMED_VOLUME, "/var/lib/registry");
-            LOG.infov("Floci in container with relative host-persistent-path ({0}); "
-                    + "using named volume {1} for ECR registry data",
-                    hostPersistentPath, NAMED_VOLUME);
-        } else if (isExplicitVolume) {
-            // User set hostPersistentPath to a Docker named-volume name
-            String internalMountPath = "/app/data";
-            specBuilder.withNamedVolume(hostPersistentPath, internalMountPath);
-            env.add("REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=" + internalMountPath + "/ecr/registry");
-        } else {
-            // Host path bind-mount.
-            // normalize() eliminates any "./" segments produced by toAbsolutePath() on a
-            // relative config path (e.g. "./data/ecr" → "/app/./data/ecr") so the
-            // replace() matches reliably.
-            String dataPath = Paths.get(config.services().ecr().dataPath(), "registry")
-                    .toAbsolutePath().normalize().toString();
-            String persistentPath = Paths.get(config.storage().persistentPath())
-                    .toAbsolutePath().normalize().toString();
-            String hostDataPath = dataPath.replace(persistentPath, hostPersistentPath);
-            if (!inContainer) {
-                ensureDataDir();
-            }
-            specBuilder.withBind(hostDataPath, "/var/lib/registry");
+            return;
         }
+
+        // Legacy host-path mode: host-persistent-path is an absolute path
+        boolean inContainer = containerDetector.isRunningInContainer();
+        String dataPath = Paths.get(config.services().ecr().dataPath(), "registry")
+                .toAbsolutePath().normalize().toString();
+        String persistentPath = Paths.get(config.storage().persistentPath())
+                .toAbsolutePath().normalize().toString();
+        String hostDataPath = dataPath.replace(persistentPath, config.storage().hostPersistentPath());
+        if (!inContainer) {
+            ensureDataDir();
+        }
+        specBuilder.withBind(hostDataPath, "/var/lib/registry");
     }
 
     private void attachLogStream() {

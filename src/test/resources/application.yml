@@ -12,6 +12,7 @@ floci:
   storage:
     mode: memory
     persistent-path: ./target/test-data
+    prune-volumes-on-delete: true
     wal:
       compaction-interval-ms: 60000
     services:
