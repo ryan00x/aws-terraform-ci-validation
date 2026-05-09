@@ -242,6 +242,9 @@ public class ApiGatewayExecuteController {
 
         MethodConfig method = matched.getResourceMethods().get(httpMethod.toUpperCase());
         if (method == null) {
+            method = matched.getResourceMethods().get("ANY");
+        }
+        if (method == null) {
             return Response.status(405)
                     .entity(jsonMessage("Method Not Allowed"))
                     .type(MediaType.APPLICATION_JSON).build();
