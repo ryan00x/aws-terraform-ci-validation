@@ -1511,14 +1511,15 @@ public class S3Controller {
             throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
         }
         String sourceBucket = decodedSource.substring(0, slashIndex);
-        String sourceKey = decodedSource.substring(slashIndex + 1);
-
+        String pathAfterBucket = decodedSource.substring(slashIndex + 1);
+        ParsedCopySource sourceObject = parseCopySourceObject(pathAfterBucket);
         String copyContentEncoding = toPersistedContentEncoding(httpHeaders.getHeaderString("Content-Encoding"));
         String copyContentDisposition = httpHeaders.getHeaderString("Content-Disposition");
         String copyCacheControl = httpHeaders.getHeaderString("Cache-Control");
         String copyServerSideEncryption = httpHeaders.getHeaderString("x-amz-server-side-encryption");
         String cannedAcl = httpHeaders.getHeaderString("x-amz-acl");
-        S3Object copy = s3Service.copyObject(sourceBucket, sourceKey, destBucket, destKey,
+        S3Object copy = s3Service.copyObject(sourceBucket, sourceObject.objectKey(), destBucket, destKey,
+                sourceObject.versionId(),
                 new CopyObjectOptions()
                         .withMetadataDirective(httpHeaders.getHeaderString("x-amz-metadata-directive"))
                         .withReplacementMetadata(extractUserMetadata(httpHeaders))
@@ -1556,10 +1557,11 @@ public class S3Controller {
             throw new AwsException("InvalidArgument", "Invalid copy source: " + copySource, 400);
         }
         String sourceBucket = decodedSource.substring(0, slashIndex);
-        String sourceKey = decodedSource.substring(slashIndex + 1);
+        String pathAfterBucket = decodedSource.substring(slashIndex + 1);
+        ParsedCopySource sourceObject = parseCopySourceObject(pathAfterBucket);
         String copySourceRange = httpHeaders.getHeaderString("x-amz-copy-source-range");
         String eTag = s3Service.uploadPartCopy(destBucket, destKey, uploadId, partNumber,
-                sourceBucket, sourceKey, copySourceRange);
+                sourceBucket, sourceObject.objectKey(), sourceObject.versionId(), copySourceRange);
         String xml = new XmlBuilder()
                 .raw("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .start("CopyPartResult", AwsNamespaces.S3)
@@ -2208,5 +2210,47 @@ public class S3Controller {
         }
         s3Service.putBucketWebsite(bucket, new WebsiteConfiguration(indexDoc, errorDoc));
         return Response.ok().build();
+    }
+
+    /**
+     * Splits the {@code CopyObject}/{@code UploadPartCopy} copy-source remainder into S3 object key and
+     * optional source {@code versionId}.
+     * <ul>
+     *   <li><b>Input:</b> decoded {@code x-amz-copy-source} with bucket already removed (substring after
+     *   the {@code '/'} that follows the bucket). Both {@code handleCopyObject} and
+     *   {@code handleUploadPartCopy} compute this as {@code pathAfterBucket}.</li>
+     *   <li><b>Key:</b> substring before the first {@code '?'} if any; keys may contain more {@code '/'}
+     *   segments.</li>
+     *   <li><b>{@code versionId}:</b> first {@code versionId} query pair, when present (raw value after
+     *   {@code '='}). Other query pairs are ignored.</li>
+     * </ul>
+     *
+     * @param pathAfterBucket object key alone, or key with query (for example {@code dir/k.txt?versionId=uuid})
+     * @return key without trailing query plus {@code versionId} value, or {@code null} version when absent
+     */
+    private ParsedCopySource parseCopySourceObject(String pathAfterBucket) {
+        int queryStart = pathAfterBucket.indexOf('?');
+        if (queryStart < 0) {
+            return new ParsedCopySource(pathAfterBucket, null);
+        }
+        String objectKey = pathAfterBucket.substring(0, queryStart);
+        String query = pathAfterBucket.substring(queryStart + 1);
+        String versionId = null;
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            String name = pair.substring(0, eq);
+            String value = pair.substring(eq + 1);
+            if ("versionId".equals(name)) {
+                versionId = value;
+                break;
+            }
+        }
+        return new ParsedCopySource(objectKey, versionId);
+    }
+
+    private record ParsedCopySource(String objectKey, String versionId) {
     }
 }
