@@ -65,10 +65,12 @@ public class KmsService {
         this.regionResolver = regionResolver;
     }
 
-    private static final String DEFAULT_KEY_POLICY =
-            "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"Enable IAM User Permissions\"," +
-            "\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::000000000000:root\"}," +
-            "\"Action\":\"kms:*\",\"Resource\":\"*\"}]}";
+    private String buildDefaultKeyPolicy() {
+        String account = regionResolver.getAccountId();
+        return "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"Enable IAM User Permissions\"," +
+               "\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::" + account + ":root\"}," +
+               "\"Action\":\"kms:*\",\"Resource\":\"*\"}]}";
+    }
 
     public KmsKey createKey(String description, String region) {
         return createKey(description, "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT", null, Map.of(), region);
@@ -95,7 +97,7 @@ public class KmsService {
         key.setDescription(description);
         key.setKeyUsage(effectiveUsage);
         key.setCustomerMasterKeySpec(effectiveSpec);
-        key.setPolicy(policy != null ? policy : DEFAULT_KEY_POLICY);
+        key.setPolicy(policy != null ? policy : buildDefaultKeyPolicy());
         key.getTags().putAll(ReservedTags.stripReservedTags(tags));
 
         generateKeyMaterial(key);

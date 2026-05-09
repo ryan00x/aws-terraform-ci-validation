@@ -38,7 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class S3Service {
-    private static final String DEFAULT_OWNER_ID = "000000000000";
+    private String ownerId() { return regionResolver != null ? regionResolver.getAccountId() : "000000000000"; }
     private static final String DEFAULT_OWNER_DISPLAY_NAME = "floci";
     private static final String ALL_USERS_GROUP_URI = "http://acs.amazonaws.com/groups/global/AllUsers";
     private static final String AUTHENTICATED_USERS_GROUP_URI = "http://acs.amazonaws.com/groups/global/AuthenticatedUsers";
@@ -1397,7 +1397,7 @@ public class S3Service {
     public String getBucketAcl(String bucketName) {
         Bucket bucket = bucketStore.get(bucketName)
                 .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
-        return bucket.getAcl() != null ? bucket.getAcl() : defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+        return bucket.getAcl() != null ? bucket.getAcl() : defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
     }
 
     public void putBucketAcl(String bucketName, String acl) {
@@ -1409,7 +1409,7 @@ public class S3Service {
 
     public String getObjectAcl(String bucketName, String key, String versionId) {
         S3Object obj = getObject(bucketName, key, versionId);
-        return obj.getAcl() != null ? obj.getAcl() : defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+        return obj.getAcl() != null ? obj.getAcl() : defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
     }
 
     public void putObjectAcl(String bucketName, String key, String versionId, String acl) {
@@ -1517,16 +1517,16 @@ public class S3Service {
                 .build();
     }
 
-    static String cannedObjectAclXml(String cannedAcl) {
+    String cannedObjectAclXml(String cannedAcl) {
         if (cannedAcl == null || cannedAcl.isBlank()) {
             return null;
         }
         return switch (cannedAcl) {
             case "private", "bucket-owner-read", "bucket-owner-full-control" ->
-                    defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+                    defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
             // Floci currently runs as a single synthetic account, so there is no distinct EC2 bundle-reader
             // principal to represent in GetObjectAcl responses yet.
-            case "aws-exec-read" -> defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+            case "aws-exec-read" -> defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
             case "public-read" -> objectAclXml(
                     ownerFullControlGrant(),
                     groupGrant(ALL_USERS_GROUP_URI, "READ"));
@@ -1560,8 +1560,8 @@ public class S3Service {
         return normalized;
     }
 
-    private static String ownerFullControlGrant() {
-        return canonicalUserGrant(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME, "FULL_CONTROL");
+    private String ownerFullControlGrant() {
+        return canonicalUserGrant(ownerId(), DEFAULT_OWNER_DISPLAY_NAME, "FULL_CONTROL");
     }
 
     private static String canonicalUserGrant(String id, String displayName, String permission) {
@@ -1587,11 +1587,11 @@ public class S3Service {
                 .build();
     }
 
-    private static String objectAclXml(String... grants) {
+    private String objectAclXml(String... grants) {
         XmlBuilder xml = new XmlBuilder()
                 .start("AccessControlPolicy")
                 .start("Owner")
-                .elem("ID", DEFAULT_OWNER_ID)
+                .elem("ID", ownerId())
                 .elem("DisplayName", DEFAULT_OWNER_DISPLAY_NAME)
                 .end("Owner")
                 .start("AccessControlList");

@@ -43,6 +43,7 @@ public class FirehoseService {
     public String createDeliveryStream(String name, S3Destination s3Config) {
         String arn = AwsArnUtils.Arn.of("firehose", regionResolver.getDefaultRegion(), regionResolver.getAccountId(), "deliverystream/" + name).toString();
         DeliveryStreamDescription description = new DeliveryStreamDescription(name, arn, s3Config);
+        description.setAccountId(regionResolver.getAccountId());
         streamStore.put(name, description);
         buffers.put(name, Collections.synchronizedList(new ArrayList<>()));
         LOG.infov("Created Firehose delivery stream: {0}", name);

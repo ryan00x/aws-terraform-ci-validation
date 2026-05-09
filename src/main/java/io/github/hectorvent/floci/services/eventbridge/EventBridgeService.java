@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.eventbridge.model.Archive;
@@ -100,9 +101,10 @@ public class EventBridgeService {
     @PostConstruct
     void init() {
         if (ruleScheduler != null) {
-            ruleStore.keys().forEach(key -> {
-                ruleStore.get(key).ifPresent(this::startSchedulerIfNeeded);
-            });
+            List<Rule> allRules = ruleStore instanceof AccountAwareStorageBackend<Rule> aware
+                    ? aware.scanAllAccounts()
+                    : ruleStore.scan(k -> true);
+            allRules.forEach(this::startSchedulerIfNeeded);
             LOG.infov("EventBridge initialized, {0} scheduler(s) restored", ruleScheduler.getActiveSchedulerCount());
         }
     }
@@ -197,6 +199,7 @@ public class EventBridgeService {
 
         String key = ruleKey(region, effectiveBus, name);
         Rule rule = ruleStore.get(key).orElse(new Rule());
+        rule.setAccountId(regionResolver.getAccountId());
         rule.setName(name);
         rule.setArn(buildRuleArn(region, effectiveBus, name));
         rule.setEventBusName(effectiveBus);
@@ -572,6 +575,10 @@ public class EventBridgeService {
     public record PutEventsResult(int failedCount, List<Map<String, String>> entries) {}
 
     public PutEventsResult putEvents(List<Map<String, Object>> entries, String region) {
+        return putEvents(entries, region, null);
+    }
+
+    private PutEventsResult putEvents(List<Map<String, Object>> entries, String region, String accountId) {
         int failed = 0;
         List<Map<String, String>> resultEntries = new ArrayList<>();
 
@@ -582,7 +589,7 @@ public class EventBridgeService {
 
             if ("default".equals(effectiveBus)) {
                 getOrCreateDefaultBus(region);
-            } else if (busStore.get(busStoreKey).isEmpty()) {
+            } else if (accountGet(busStore, accountId, busStoreKey).isEmpty()) {
                 failed++;
                 Map<String, String> errorEntry = new HashMap<>();
                 errorEntry.put("ErrorCode", "InvalidArgument");
@@ -593,13 +600,15 @@ public class EventBridgeService {
 
             String eventId = UUID.randomUUID().toString();
             String rulePrefix = ruleKeyPrefix(region, effectiveBus);
-            List<Rule> matchedRules = ruleStore.scan(k ->
-                    k.startsWith(rulePrefix) && isRuleEnabled(k));
+            List<Rule> candidateRules = accountScan(ruleStore, accountId, k -> k.startsWith(rulePrefix));
 
-            for (Rule rule : matchedRules) {
+            for (Rule rule : candidateRules) {
+                if (rule.getState() != RuleState.ENABLED) {
+                    continue;
+                }
                 if (matchesPattern(entry, rule.getEventPattern())) {
                     String ruleKey = ruleKey(region, effectiveBus, rule.getName());
-                    List<Target> targets = targetStore.get(ruleKey).orElse(List.of());
+                    List<Target> targets = accountGet(targetStore, accountId, ruleKey).orElse(List.of());
                     String eventJson = buildEventEnvelope(entry, effectiveBus, eventId);
                     for (Target target : targets) {
                         invoker.invokeTarget(target, eventJson, region);
@@ -607,7 +616,7 @@ public class EventBridgeService {
                 }
             }
 
-            captureToArchives(entry, busStoreKey, eventId, region);
+            captureToArchives(entry, busStoreKey, eventId, region, accountId);
 
             Map<String, String> successEntry = new HashMap<>();
             successEntry.put("EventId", eventId);
@@ -913,16 +922,16 @@ public class EventBridgeService {
     }
 
     private void captureToArchives(Map<String, Object> entry, String busStoreKey,
-                                   String eventId, String region) {
-        EventBus bus = busStore.get(busStoreKey).orElse(null);
+                                   String eventId, String region, String accountId) {
+        EventBus bus = accountGet(busStore, accountId, busStoreKey).orElse(null);
         if (bus == null) {
             return;
         }
         String busArn = bus.getArn();
         String archivePrefix = "archive:" + region + ":";
-        List<Archive> candidates = archiveStore.scan(k ->
+        List<Archive> candidates = accountScan(archiveStore, accountId, k ->
                 k.startsWith(archivePrefix)
-                        && archiveStore.get(k).map(a ->
+                        && accountGet(archiveStore, accountId, k).map(a ->
                         a.getState() == ArchiveState.ENABLED
                                 && busArn.equals(a.getEventSourceArn())).orElse(false));
 
@@ -930,7 +939,7 @@ public class EventBridgeService {
             if (matchesPattern(entry, archive.getEventPattern())) {
                 String evKey = archivedEventKey(region, archive.getArchiveName());
                 List<ArchivedEvent> stored = new ArrayList<>(
-                        archivedEventStore.get(evKey).orElse(new ArrayList<>()));
+                        accountGet(archivedEventStore, accountId, evKey).orElse(new ArrayList<>()));
                 ArchivedEvent ae = new ArchivedEvent(
                         eventId,
                         Instant.now(),
@@ -940,9 +949,9 @@ public class EventBridgeService {
                         busArn
                 );
                 stored.add(ae);
-                archivedEventStore.put(evKey, stored);
+                accountPut(archivedEventStore, accountId, evKey, stored);
                 archive.setEventCount(archive.getEventCount() + 1);
-                archiveStore.put(archiveKey(region, archive.getArchiveName()), archive);
+                accountPut(archiveStore, accountId, archiveKey(region, archive.getArchiveName()), archive);
             }
         }
     }
@@ -971,6 +980,8 @@ public class EventBridgeService {
                 .get(archivedEventKey(region, archiveName))
                 .orElse(List.of());
 
+        String capturedAccountId = regionResolver.getAccountId();
+
         Replay replay = new Replay();
         replay.setReplayName(replayName);
         replay.setReplayArn(regionResolver.buildArn("events", region, "replay/" + replayName));
@@ -981,14 +992,15 @@ public class EventBridgeService {
         replay.setEventEndTime(eventEndTime);
         replay.setState(ReplayState.STARTING);
         replay.setReplayStartTime(Instant.now());
+        replay.setAccountId(capturedAccountId);
         replayStore.put(key, replay);
 
         replayDispatcher.dispatch(
                 replay,
                 events,
-                entries -> putEvents(entries, region),
-                (name, state) -> updateReplayState(name, state, region),
-                time -> updateReplayLastReplayed(replayName, time, region)
+                entries -> putEvents(entries, region, capturedAccountId),
+                (name, state) -> updateReplayStateForAccount(capturedAccountId, name, state, region),
+                time -> updateReplayLastReplayedForAccount(capturedAccountId, replayName, time, region)
         );
 
         LOG.infov("Started replay: {0} from archive {1}", replayName, archiveName);
@@ -1045,23 +1057,33 @@ public class EventBridgeService {
     }
 
     void updateReplayState(String replayName, ReplayState state, String region) {
+        updateReplayStateForAccount(null, replayName, state, region);
+    }
+
+    private void updateReplayStateForAccount(String accountId, String replayName,
+                                             ReplayState state, String region) {
         String key = replayKey(region, replayName);
-        replayStore.get(key).ifPresent(r -> {
+        accountGet(replayStore, accountId, key).ifPresent(r -> {
             r.setState(state);
             if (state == ReplayState.COMPLETED || state == ReplayState.CANCELLED
                     || state == ReplayState.FAILED) {
                 r.setReplayEndTime(Instant.now());
             }
-            replayStore.put(key, r);
+            accountPut(replayStore, accountId, key, r);
             LOG.debugv("Replay {0} transitioned to {1}", replayName, state);
         });
     }
 
     void updateReplayLastReplayed(String replayName, Instant eventTime, String region) {
+        updateReplayLastReplayedForAccount(null, replayName, eventTime, region);
+    }
+
+    private void updateReplayLastReplayedForAccount(String accountId, String replayName,
+                                                    Instant eventTime, String region) {
         String key = replayKey(region, replayName);
-        replayStore.get(key).ifPresent(r -> {
+        accountGet(replayStore, accountId, key).ifPresent(r -> {
             r.setEventLastReplayedTime(eventTime);
-            replayStore.put(key, r);
+            accountPut(replayStore, accountId, key, r);
         });
     }
 
@@ -1092,15 +1114,39 @@ public class EventBridgeService {
                 && !rule.getScheduleExpression().isBlank()) {
             String region = rule.getRegion() != null ? rule.getRegion() : "us-east-1";
             String key = ruleKey(region, rule.getEventBusName(), rule.getName());
+            String accountId = rule.getAccountId();
             ruleScheduler.startScheduler(
                 rule.getArn(),
                 rule.getScheduleExpression(),
                 () -> {
-                    Rule r = ruleStore.get(key).orElse(null);
-                    List<Target> t = targetStore.get(key).orElse(List.of());
+                    Rule r = accountGet(ruleStore, accountId, key).orElse(null);
+                    List<Target> t = accountGet(targetStore, accountId, key).orElse(List.of());
                     return new RuleScheduler.ScheduleData(r, t);
                 }
             );
+        }
+    }
+
+    private <V> java.util.Optional<V> accountGet(StorageBackend<String, V> store, String accountId, String key) {
+        if (accountId != null && store instanceof AccountAwareStorageBackend<V> aware) {
+            return aware.getForAccount(accountId, key);
+        }
+        return store.get(key);
+    }
+
+    private <V> List<V> accountScan(StorageBackend<String, V> store, String accountId,
+                                    java.util.function.Predicate<String> filter) {
+        if (accountId != null && store instanceof AccountAwareStorageBackend<V> aware) {
+            return aware.scanForAccount(accountId, filter);
+        }
+        return store.scan(filter);
+    }
+
+    private <V> void accountPut(StorageBackend<String, V> store, String accountId, String key, V value) {
+        if (accountId != null && store instanceof AccountAwareStorageBackend<V> aware) {
+            aware.putForAccount(accountId, key, value);
+        } else {
+            store.put(key, value);
         }
     }
 

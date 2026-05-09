@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.cloudformation;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.dns.EmbeddedDnsServer;
 import io.github.hectorvent.floci.services.cloudformation.model.ChangeSet;
 import io.github.hectorvent.floci.services.cloudformation.model.Stack;
@@ -42,14 +43,17 @@ public class CloudFormationService {
     private final S3Service s3Service;
     private final ObjectMapper objectMapper;
     private final EmulatorConfig config;
+    private final RegionResolver regionResolver;
 
     @Inject
     public CloudFormationService(CloudFormationResourceProvisioner provisioner, S3Service s3Service,
-                                 ObjectMapper objectMapper, EmulatorConfig config) {
+                                 ObjectMapper objectMapper, EmulatorConfig config,
+                                 RegionResolver regionResolver) {
         this.provisioner = provisioner;
         this.s3Service = s3Service;
         this.objectMapper = objectMapper;
         this.config = config;
+        this.regionResolver = regionResolver;
     }
 
     // ── DescribeStacks ────────────────────────────────────────────────────────
@@ -84,7 +88,7 @@ public class CloudFormationService {
         });
 
         ChangeSet cs = new ChangeSet();
-        cs.setChangeSetId(AwsArnUtils.Arn.of("cloudformation", region, config.defaultAccountId(), "changeSet/" + changeSetName + "/" + UUID.randomUUID()).toString());
+        cs.setChangeSetId(AwsArnUtils.Arn.of("cloudformation", region, regionResolver.getAccountId(), "changeSet/" + changeSetName + "/" + UUID.randomUUID()).toString());
         cs.setChangeSetName(changeSetName);
         cs.setStackName(stackName);
         cs.setStackId(stack.getStackId());
@@ -132,7 +136,8 @@ public class CloudFormationService {
         String templateBody = cs.getTemplateBody();
         Map<String, String> params = cs.getParameters() != null ? cs.getParameters() : Map.of();
 
-        return executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region));
+        String accountId = regionResolver.getAccountId();
+        return executor.submit(() -> executeTemplate(stack, templateBody, params, isCreate, region, accountId));
     }
 
     // ── DeleteChangeSet ───────────────────────────────────────────────────────
@@ -252,7 +257,7 @@ public class CloudFormationService {
     }
 
     private void executeTemplate(Stack stack, String templateBody, Map<String, String> params,
-                                 boolean isCreate, String region) {
+                                 boolean isCreate, String region, String accountId) {
         try {
             JsonNode template = parseTemplate(templateBody);
             stack.setTemplateBody(templateBody);
@@ -261,7 +266,7 @@ public class CloudFormationService {
             Map<String, String> resolvedParams = resolveDefaultParameters(template, params);
 
             // Resolve conditions first
-            Map<String, Boolean> conditions = resolveConditions(template, resolvedParams, stack, region);
+            Map<String, Boolean> conditions = resolveConditions(template, resolvedParams, stack, region, accountId);
 
             // Mappings
             Map<String, JsonNode> mappings = new HashMap<>();
@@ -289,7 +294,7 @@ public class CloudFormationService {
                     JsonNode props = resDef.path("Properties");
 
                     CloudFormationTemplateEngine engine = new CloudFormationTemplateEngine(
-                            config.defaultAccountId(), region, stack.getStackName(),
+                            accountId, region, stack.getStackName(),
                             stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper,
                             name -> exports.get(exportKey(region, name)));
 
@@ -303,7 +308,7 @@ public class CloudFormationService {
 
                     addEvent(stack, logicalId, null, type, "CREATE_IN_PROGRESS", null);
                     resource = provisioner.provision(logicalId, type, props.isMissingNode() ? null : props,
-                            engine, region, config.defaultAccountId(), stack.getStackName(),
+                            engine, region, accountId, stack.getStackName(),
                             resource.getPhysicalId(), resource.getAttributes());
                     stack.getResources().put(logicalId, resource);
 
@@ -316,7 +321,7 @@ public class CloudFormationService {
             }
 
             CloudFormationTemplateEngine finalEngine = new CloudFormationTemplateEngine(
-                    config.defaultAccountId(), region, stack.getStackName(),
+                    accountId, region, stack.getStackName(),
                     stack.getStackId(), resolvedParams, physicalIds, resourceAttrs, conditions, mappings, objectMapper,
                     name -> exports.get(exportKey(region, name)));
 
@@ -405,7 +410,7 @@ public class CloudFormationService {
     }
 
     private Map<String, Boolean> resolveConditions(JsonNode template, Map<String, String> params,
-                                                   Stack stack, String region) {
+                                                   Stack stack, String region, String accountId) {
         Map<String, Boolean> conditions = new HashMap<>();
         JsonNode condNode = template.path("Conditions");
         if (!condNode.isObject()) {
@@ -414,12 +419,12 @@ public class CloudFormationService {
         // Two-pass: collect all names first, then evaluate (handles forward references)
         condNode.fields().forEachRemaining(e -> conditions.put(e.getKey(), false));
         condNode.fields().forEachRemaining(e ->
-                conditions.put(e.getKey(), evaluateCondition(e.getValue(), params, conditions)));
+                conditions.put(e.getKey(), evaluateCondition(e.getValue(), params, conditions, region, accountId)));
         return conditions;
     }
 
     private boolean evaluateCondition(JsonNode expr, Map<String, String> params,
-                                      Map<String, Boolean> conditions) {
+                                      Map<String, Boolean> conditions, String region, String accountId) {
         if (expr == null || expr.isNull()) {
             return false;
         }
@@ -433,20 +438,20 @@ public class CloudFormationService {
             if (expr.has("Fn::Equals")) {
                 JsonNode args = expr.get("Fn::Equals");
                 if (args.isArray() && args.size() == 2) {
-                    String left = resolveConditionValue(args.get(0), params);
-                    String right = resolveConditionValue(args.get(1), params);
+                    String left = resolveConditionValue(args.get(0), params, region, accountId);
+                    String right = resolveConditionValue(args.get(1), params, region, accountId);
                     return left.equals(right);
                 }
             }
             if (expr.has("Fn::Not")) {
                 JsonNode args = expr.get("Fn::Not");
                 if (args.isArray() && !args.isEmpty()) {
-                    return !evaluateCondition(args.get(0), params, conditions);
+                    return !evaluateCondition(args.get(0), params, conditions, region, accountId);
                 }
             }
             if (expr.has("Fn::And")) {
                 for (JsonNode item : expr.get("Fn::And")) {
-                    if (!evaluateCondition(item, params, conditions)) {
+                    if (!evaluateCondition(item, params, conditions, region, accountId)) {
                         return false;
                     }
                 }
@@ -454,7 +459,7 @@ public class CloudFormationService {
             }
             if (expr.has("Fn::Or")) {
                 for (JsonNode item : expr.get("Fn::Or")) {
-                    if (evaluateCondition(item, params, conditions)) {
+                    if (evaluateCondition(item, params, conditions, region, accountId)) {
                         return true;
                     }
                 }
@@ -464,15 +469,16 @@ public class CloudFormationService {
         return false;
     }
 
-    private String resolveConditionValue(JsonNode node, Map<String, String> params) {
+    private String resolveConditionValue(JsonNode node, Map<String, String> params,
+                                         String region, String accountId) {
         if (node.isTextual()) {
             return node.textValue();
         }
         if (node.isObject() && node.has("Ref")) {
             String name = node.get("Ref").asText();
             return switch (name) {
-                case "AWS::AccountId" -> config.defaultAccountId();
-                case "AWS::Region" -> "us-east-1";
+                case "AWS::AccountId" -> accountId;
+                case "AWS::Region" -> region;
                 case "AWS::NoValue" -> "";
                 default -> params.getOrDefault(name, "");
             };
@@ -561,7 +567,7 @@ public class CloudFormationService {
         stack.setStackName(stackName);
         stack.setRegion(region);
         stack.setStatus("REVIEW_IN_PROGRESS");
-        String stackId = AwsArnUtils.Arn.of("cloudformation", region, config.defaultAccountId(), "stack/" + stackName + "/" + UUID.randomUUID()).toString();
+        String stackId = AwsArnUtils.Arn.of("cloudformation", region, regionResolver.getAccountId(), "stack/" + stackName + "/" + UUID.randomUUID()).toString();
         stack.setStackId(stackId);
         stack.setCreationTime(Instant.now());
         return stack;

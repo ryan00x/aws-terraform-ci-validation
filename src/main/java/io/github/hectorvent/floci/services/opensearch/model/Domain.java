@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.opensearch.model;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -45,6 +46,9 @@ public class Domain {
 
     @JsonProperty("ContainerId")
     private String containerId;
+
+    @JsonIgnore
+    private String accountId;
 
     @JsonProperty("VolumeId")
     private String volumeId;
@@ -157,5 +161,13 @@ public class Domain {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getAccountId() {
+        return accountId;
+    }
+
+    public void setAccountId(String accountId) {
+        this.accountId = accountId;
     }
 }

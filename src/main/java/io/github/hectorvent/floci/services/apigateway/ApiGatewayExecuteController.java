@@ -618,7 +618,7 @@ public class ApiGatewayExecuteController {
 
         VtlTemplateEngine.VtlContext vtlCtx = new VtlTemplateEngine.VtlContext(
                 bodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
-                resource.getPath(), requestId, "000000000000", null);
+                resource.getPath(), requestId, regionResolver.getAccountId(), null);
 
         // Apply request parameter mapping (method.request.* → integration.request.*)
         Map<String, String> integrationReqParams = integration.getRequestParameters();
@@ -789,7 +789,7 @@ public class ApiGatewayExecuteController {
                 if (responseTemplate != null && !responseTemplate.isEmpty()) {
                     VtlTemplateEngine.VtlContext responseMappingCtx = new VtlTemplateEngine.VtlContext(
                             responseBodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
-                            resource.getPath(), requestId, "000000000000", null);
+                            resource.getPath(), requestId, regionResolver.getAccountId(), null);
                     templateResult = vtlEngine.evaluate(responseTemplate, responseMappingCtx);
                     finalBody = templateResult.body();
                 } else {
@@ -924,7 +924,7 @@ public class ApiGatewayExecuteController {
 
         VtlTemplateEngine.VtlContext vtlCtx = new VtlTemplateEngine.VtlContext(
                 bodyStr, headerMap, queryMap, pathMap, stageName, httpMethod,
-                resource.getPath(), requestId, "000000000000", null);
+                resource.getPath(), requestId, regionResolver.getAccountId(), null);
 
         VtlTemplateEngine.EvaluateResult result = vtlEngine.evaluate(template, vtlCtx);
 
@@ -1136,7 +1136,7 @@ public class ApiGatewayExecuteController {
         }
 
         ObjectNode ctx = event.putObject("requestContext");
-        ctx.put("accountId", "000000000000");
+        ctx.put("accountId", regionResolver.getAccountId());
         ctx.put("apiId", apiId);
         ctx.put("domainName", apiId + ".execute-api.us-east-1.amazonaws.com");
         ctx.put("domainPrefix", apiId);

@@ -149,7 +149,7 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::CDK::Metadata" -> provisionCdkMetadata(resource);
                 case "AWS::S3::BucketPolicy" -> provisionS3BucketPolicy(resource, properties, engine);
                 case "AWS::SQS::QueuePolicy" -> provisionSqsQueuePolicy(resource, properties, engine);
-                case "AWS::ECR::Repository" -> provisionEcrRepository(resource, properties, engine, stackName);
+                case "AWS::ECR::Repository" -> provisionEcrRepository(resource, properties, engine, stackName, region);
                 case "AWS::Route53::HostedZone" -> provisionRoute53HostedZone(resource, properties, engine);
                 case "AWS::Route53::RecordSet" -> provisionRoute53RecordSet(resource, properties, engine);
                 case "AWS::Events::Rule" -> provisionEventBridgeRule(resource, properties, engine, region, stackName);
@@ -202,7 +202,7 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::ApiGateway::RestApi" -> apiGatewayService.deleteRestApi(region, physicalId);
                 case "AWS::ApiGatewayV2::Api" -> apiGatewayV2Service.deleteApi(region, physicalId);
                 case "AWS::ECR::Repository" ->
-                        ecrService.deleteRepository(physicalId, null, true, "us-east-1");
+                        ecrService.deleteRepository(physicalId, null, true, region);
                 case "AWS::Pipes::Pipe" -> pipesService.deletePipe(physicalId, region);
                 case "AWS::Lambda::EventSourceMapping" -> lambdaService.deleteEventSourceMapping(physicalId);
                 default -> LOG.debugv("Skipping delete of unsupported resource type: {0}", resourceType);
@@ -1299,7 +1299,7 @@ public class CloudFormationResourceProvisioner {
     }
 
     private void provisionEcrRepository(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
-                                        String stackName) {
+                                        String stackName, String region) {
         String repoName = resolveOptional(props, "RepositoryName", engine);
         if (repoName == null || repoName.isBlank()) {
             repoName = generatePhysicalName(stackName, r.getLogicalId(), 256, true);
@@ -1313,10 +1313,10 @@ public class CloudFormationResourceProvisioner {
 
         Repository repo;
         try {
-            repo = ecrService.createRepository(repoName, null, mutability, null, null, null, tags, "us-east-1");
+            repo = ecrService.createRepository(repoName, null, mutability, null, null, null, tags, region);
         } catch (AwsException e) {
             if ("RepositoryAlreadyExistsException".equals(e.getErrorCode())) {
-                repo = ecrService.describeRepositories(List.of(repoName), null, "us-east-1").get(0);
+                repo = ecrService.describeRepositories(List.of(repoName), null, region).get(0);
             } else {
                 throw e;
             }
@@ -1327,14 +1327,14 @@ public class CloudFormationResourceProvisioner {
             JsonNode lp = engine.resolveNode(props.get("LifecyclePolicy"));
             String policyText = lp.path("LifecyclePolicyText").asText(null);
             if (policyText != null && !policyText.isEmpty()) {
-                ecrService.putLifecyclePolicy(repoName, null, policyText, "us-east-1");
+                ecrService.putLifecyclePolicy(repoName, null, policyText, region);
             }
         }
         if (props != null && props.has("RepositoryPolicyText")) {
             JsonNode pol = engine.resolveNode(props.get("RepositoryPolicyText"));
             String policyText = pol.isTextual() ? pol.asText() : pol.toString();
             if (policyText != null && !policyText.isEmpty()) {
-                ecrService.setRepositoryPolicy(repoName, null, policyText, "us-east-1");
+                ecrService.setRepositoryPolicy(repoName, null, policyText, region);
             }
         }
 

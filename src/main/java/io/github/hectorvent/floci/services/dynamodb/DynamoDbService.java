@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.dynamodb;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.dynamodb.model.AttributeDefinition;
@@ -994,9 +995,17 @@ public class DynamoDbService {
 
     void deleteExpiredItems() {
         int totalDeleted = 0;
-        for (String storageKey : tableStore.keys()) {
-            TableDefinition table = tableStore.get(storageKey).orElse(null);
-            if (table == null || !table.isTtlEnabled() || table.getTtlAttributeName() == null) {
+        Map<String, TableDefinition> allTables;
+        if (tableStore instanceof AccountAwareStorageBackend<TableDefinition> aware) {
+            allTables = aware.scanAllAccountsAsMap();
+        } else {
+            allTables = new HashMap<>();
+            tableStore.keys().forEach(k -> tableStore.get(k).ifPresent(v -> allTables.put(k, v)));
+        }
+        for (Map.Entry<String, TableDefinition> entry : allTables.entrySet()) {
+            String storageKey = entry.getKey();
+            TableDefinition table = entry.getValue();
+            if (!table.isTtlEnabled() || table.getTtlAttributeName() == null) {
                 continue;
             }
             var items = itemsByTable.get(storageKey);

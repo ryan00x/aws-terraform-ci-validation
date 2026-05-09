@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.transfer;
 import com.fasterxml.jackson.core.type.TypeReference;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.transfer.model.HomeDirectoryMapping;
@@ -27,17 +28,17 @@ public class TransferService {
     private final StorageBackend<String, Server> serverStore;
     private final StorageBackend<String, User> userStore;
     private final StorageBackend<String, Map<String, String>> tagStore;
-    private final String accountId;
+    private final RegionResolver regionResolver;
 
     @Inject
-    public TransferService(StorageFactory factory, EmulatorConfig config) {
+    public TransferService(StorageFactory factory, EmulatorConfig config, RegionResolver regionResolver) {
         this.serverStore = factory.create("transfer", "transfer-servers.json",
                 new TypeReference<Map<String, Server>>() {});
         this.userStore = factory.create("transfer", "transfer-users.json",
                 new TypeReference<Map<String, User>>() {});
         this.tagStore = factory.create("transfer", "transfer-tags.json",
                 new TypeReference<Map<String, Map<String, String>>>() {});
-        this.accountId = config.defaultAccountId();
+        this.regionResolver = regionResolver;
     }
 
     // ── Servers ───────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ public class TransferService {
                                String securityPolicyName,
                                Map<String, String> tags) {
         String serverId = generateServerId();
-        String arn = "arn:aws:transfer:" + region + ":" + accountId + ":server/" + serverId;
+        String arn = "arn:aws:transfer:" + region + ":" + regionResolver.getAccountId() + ":server/" + serverId;
 
         Server server = new Server();
         server.setServerId(serverId);
@@ -179,7 +180,7 @@ public class TransferService {
                     "User " + userName + " already exists on server " + serverId + ".", 400);
         }
 
-        String arn = "arn:aws:transfer:" + region + ":" + accountId + ":user/" + serverId + "/" + userName;
+        String arn = "arn:aws:transfer:" + region + ":" + regionResolver.getAccountId() + ":user/" + serverId + "/" + userName;
         User user = new User();
         user.setUserName(userName);
         user.setArn(arn);

@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.elasticache;
 
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.AwsQueryResponse;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
@@ -32,11 +33,14 @@ public class ElastiCacheQueryHandler {
 
     private final SigV4Validator sigV4Validator;
     private final ElastiCacheService service;
+    private final RegionResolver regionResolver;
 
     @Inject
-    public ElastiCacheQueryHandler(SigV4Validator sigV4Validator, ElastiCacheService service) {
+    public ElastiCacheQueryHandler(SigV4Validator sigV4Validator, ElastiCacheService service,
+                                   RegionResolver regionResolver) {
         this.sigV4Validator = sigV4Validator;
         this.service = service;
+        this.regionResolver = regionResolver;
     }
 
     public Response handle(String action, MultivaluedMap<String, String> params) {
@@ -289,7 +293,7 @@ public class ElastiCacheQueryHandler {
                 .elem("Engine", "redis")
                 .elem("MinimumEngineVersion", "6.0")
                 .start("UserGroupIds").end("UserGroupIds")
-                .elem("ARN", AwsArnUtils.Arn.of("elasticache", "us-east-1", "000000000000", "user:" + u.getUserId()).toString())
+                .elem("ARN", AwsArnUtils.Arn.of("elasticache", regionResolver.getDefaultRegion(), regionResolver.getAccountId(), "user:" + u.getUserId()).toString())
                 .build();
     }
 

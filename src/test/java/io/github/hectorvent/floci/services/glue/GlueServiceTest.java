@@ -198,9 +198,9 @@ class GlueServiceTest {
         }
 
         @Override
-        public <K, V> StorageBackend<K, V> create(String serviceName,
-                                                  String fileName,
-                                                  TypeReference<Map<K, V>> typeReference) {
+        public <V> StorageBackend<String, V> create(String serviceName,
+                                                     String fileName,
+                                                     TypeReference<Map<String, V>> typeReference) {
             return new InMemoryStorage<>();
         }
     }

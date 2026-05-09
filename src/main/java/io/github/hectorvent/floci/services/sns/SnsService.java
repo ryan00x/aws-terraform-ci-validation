@@ -198,6 +198,7 @@ public class SnsService {
         String subscriptionArn = topicArn + ":" + UUID.randomUUID().toString();
         Subscription subscription = new Subscription(subscriptionArn, topicArn, protocol, endpoint,
                 regionResolver.getAccountId());
+        subscription.setAccountId(regionResolver.getAccountId());
         if (attributes != null) subscription.getAttributes().putAll(attributes);
 
         if (PENDING_CONFIRMATION_PROTOCOLS.contains(protocol)) {

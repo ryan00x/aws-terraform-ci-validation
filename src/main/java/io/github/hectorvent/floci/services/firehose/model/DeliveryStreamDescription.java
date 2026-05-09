@@ -10,6 +10,7 @@ import java.util.List;
 public class DeliveryStreamDescription {
     @JsonProperty("DeliveryStreamName")
     private String deliveryStreamName;
+    private String accountId;
     @JsonProperty("DeliveryStreamARN")
     private String deliveryStreamARN;
     @JsonProperty("DeliveryStreamStatus")
@@ -31,6 +32,9 @@ public class DeliveryStreamDescription {
 
     public String getDeliveryStreamName() { return deliveryStreamName; }
     public void setDeliveryStreamName(String deliveryStreamName) { this.deliveryStreamName = deliveryStreamName; }
+
+    public String getAccountId() { return accountId; }
+    public void setAccountId(String accountId) { this.accountId = accountId; }
     public String getDeliveryStreamARN() { return deliveryStreamARN; }
     public void setDeliveryStreamARN(String deliveryStreamARN) { this.deliveryStreamARN = deliveryStreamARN; }
     public DeliveryStreamStatus getDeliveryStreamStatus() { return deliveryStreamStatus; }

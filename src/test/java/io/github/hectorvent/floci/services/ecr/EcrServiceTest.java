@@ -2,6 +2,7 @@ package io.github.hectorvent.floci.services.ecr;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.ecr.model.AuthorizationData;
 import io.github.hectorvent.floci.services.ecr.model.ImageMetadata;
@@ -45,13 +46,14 @@ class EcrServiceTest {
         // ensureStarted() is a no-op on the mock — no Docker calls in any test below.
 
         EmulatorConfig config = Mockito.mock(EmulatorConfig.class);
-        when(config.defaultAccountId()).thenReturn(ACCOUNT);
+        RegionResolver regionResolver = new RegionResolver(REGION, ACCOUNT);
 
         service = new EcrService(
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 registryManager,
-                config);
+                config,
+                regionResolver);
     }
 
     // ------------------------------------------------------------

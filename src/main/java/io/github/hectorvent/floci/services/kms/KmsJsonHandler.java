@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.kms;
 
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
@@ -22,11 +23,13 @@ public class KmsJsonHandler {
 
     private final KmsService service;
     private final ObjectMapper objectMapper;
+    private final RegionResolver regionResolver;
 
     @Inject
-    public KmsJsonHandler(KmsService service, ObjectMapper objectMapper) {
+    public KmsJsonHandler(KmsService service, ObjectMapper objectMapper, RegionResolver regionResolver) {
         this.service = service;
         this.objectMapper = objectMapper;
+        this.regionResolver = regionResolver;
     }
 
     public Response handle(String action, JsonNode request, String region) {
@@ -340,7 +343,7 @@ public class KmsJsonHandler {
 
     private ObjectNode keyToNode(KmsKey k) {
         ObjectNode node = objectMapper.createObjectNode();
-        node.put("AWSAccountId", "000000000000");
+        node.put("AWSAccountId", regionResolver.getAccountId());
         node.put("KeyId", k.getKeyId());
         node.put("Arn", k.getArn());
         node.put("CreationDate", k.getCreationDate());

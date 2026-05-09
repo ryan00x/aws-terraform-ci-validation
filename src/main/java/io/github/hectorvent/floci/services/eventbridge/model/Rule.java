@@ -12,6 +12,7 @@ public class Rule {
 
     private String name;
     private String arn;
+    private String accountId;
     private String eventBusName;
     private String eventPattern;
     private String scheduleExpression;
@@ -28,6 +29,9 @@ public class Rule {
 
     public String getArn() { return arn; }
     public void setArn(String arn) { this.arn = arn; }
+
+    public String getAccountId() { return accountId; }
+    public void setAccountId(String accountId) { this.accountId = accountId; }
 
     public String getEventBusName() { return eventBusName; }
     public void setEventBusName(String eventBusName) { this.eventBusName = eventBusName; }

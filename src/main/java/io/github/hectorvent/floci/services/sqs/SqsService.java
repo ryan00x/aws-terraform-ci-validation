@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.sns.SnsService;
@@ -106,9 +107,14 @@ public class SqsService {
         if (messageStore == null) {
             return;
         }
-        for (String key : messageStore.keys()) {
-            messageStore.get(key).ifPresent(msgs ->
+        if (messageStore instanceof AccountAwareStorageBackend<List<Message>> aware) {
+            aware.scanAllAccountsAsMap().forEach((key, msgs) ->
                     messagesByQueue.put(key, new GuardedMessageQueue(msgs, messageStore, key)));
+        } else {
+            for (String key : messageStore.keys()) {
+                messageStore.get(key).ifPresent(msgs ->
+                        messagesByQueue.put(key, new GuardedMessageQueue(msgs, messageStore, key)));
+            }
         }
     }
 
@@ -117,19 +123,25 @@ public class SqsService {
             return;
         }
         Instant now = Instant.now();
-        for (String key : dedupStore.keys()) {
-            dedupStore.get(key).ifPresent(entries -> {
-                ConcurrentHashMap<String, Instant> active = new ConcurrentHashMap<>();
-                entries.forEach((dedupId, expiryMs) -> {
-                    Instant expiry = Instant.ofEpochMilli(expiryMs);
-                    if (now.isBefore(expiry)) {
-                        active.put(dedupId, expiry);
-                    }
-                });
-                if (!active.isEmpty()) {
-                    deduplicationCache.put(key, active);
-                }
-            });
+        if (dedupStore instanceof AccountAwareStorageBackend<Map<String, Long>> aware) {
+            aware.scanAllAccountsAsMap().forEach((key, entries) -> loadDedupEntries(key, entries, now));
+        } else {
+            for (String key : dedupStore.keys()) {
+                dedupStore.get(key).ifPresent(entries -> loadDedupEntries(key, entries, now));
+            }
+        }
+    }
+
+    private void loadDedupEntries(String key, Map<String, Long> entries, Instant now) {
+        ConcurrentHashMap<String, Instant> active = new ConcurrentHashMap<>();
+        entries.forEach((dedupId, expiryMs) -> {
+            Instant expiry = Instant.ofEpochMilli(expiryMs);
+            if (now.isBefore(expiry)) {
+                active.put(dedupId, expiry);
+            }
+        });
+        if (!active.isEmpty()) {
+            deduplicationCache.put(key, active);
         }
     }
 
@@ -200,6 +212,7 @@ public class SqsService {
         }
 
         Queue queue = new Queue(queueName, queueUrl);
+        queue.setAccountId(regionResolver.getAccountId());
         if (attributes != null) {
             queue.getAttributes().putAll(attributes);
         }
@@ -337,7 +350,7 @@ public class SqsService {
                                Map<String, MessageAttributeValue> messageAttributes,
                                String region) {
         String storageKey = regionKey(region, queueUrl);
-        Queue queue = queueStore.get(storageKey)
+        Queue queue = getQueueByUrl(storageKey, queueUrl)
                 .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
                         "The specified queue does not exist.", 400));
 
@@ -488,7 +501,7 @@ public class SqsService {
     public List<Message> receiveMessage(String queueUrl, int maxMessages, int visibilityTimeout,
                                         int waitTimeSeconds, String region) {
         String storageKey = regionKey(region, queueUrl);
-        queueStore.get(storageKey)
+        getQueueByUrl(storageKey, queueUrl)
                 .orElseThrow(() -> new AwsException("AWS.SimpleQueueService.NonExistentQueue",
                         "The specified queue does not exist.", 400));
 
@@ -615,7 +628,10 @@ public class SqsService {
 
     public void deleteMessage(String queueUrl, String receiptHandle, String region) {
         String storageKey = regionKey(region, queueUrl);
-        ensureQueueExists(storageKey);
+        if (getQueueByUrl(storageKey, queueUrl).isEmpty()) {
+            throw new AwsException("AWS.SimpleQueueService.NonExistentQueue",
+                    "The specified queue does not exist.", 400);
+        }
 
         Optional<Message> removed = getOrCreateQueue(storageKey).removeByReceiptHandle(receiptHandle);
 
@@ -811,5 +827,31 @@ public class SqsService {
             throw new AwsException("AWS.SimpleQueueService.NonExistentQueue",
                     "The specified queue does not exist.", 400);
         }
+    }
+
+    /**
+     * Looks up a queue by URL, deriving the account from the URL path rather than from request
+     * context. This allows background workers (e.g. pollers) to access queues for any account
+     * without a live CDI request scope.
+     */
+    private Optional<Queue> getQueueByUrl(String storageKey, String queueUrl) {
+        if (queueStore instanceof AccountAwareStorageBackend<Queue> aware) {
+            String accountId = accountFromQueueUrl(queueUrl);
+            if (accountId != null) {
+                return aware.getForAccount(accountId, storageKey);
+            }
+        }
+        return queueStore.get(storageKey);
+    }
+
+    private static String accountFromQueueUrl(String queueUrl) {
+        String path = extractQueuePath(queueUrl); // "/000000000001/queueName"
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        String trimmed = path.startsWith("/") ? path.substring(1) : path;
+        int slash = trimmed.indexOf('/');
+        String candidate = slash > 0 ? trimmed.substring(0, slash) : trimmed;
+        return candidate.matches("\\d{12}") ? candidate : null;
     }
 }
