@@ -20,6 +20,7 @@ import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
@@ -688,6 +689,73 @@ public class SesController {
             throw remapV1Exception(e);
         } catch (Exception e) {
             throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    // ──────────────────────────── Tags ───────────────────────────────
+
+    @POST
+    @Path("/tags")
+    public Response tagResource(@Context HttpHeaders headers, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            if (body == null || body.isBlank()) {
+                throw new AwsException("BadRequestException", "Request body is required.", 400);
+            }
+            JsonNode request = objectMapper.readTree(body);
+            String arn = request.path("ResourceArn").asText(null);
+            if (arn == null || arn.isBlank()) {
+                throw new AwsException("BadRequestException", "ResourceArn is required.", 400);
+            }
+            JsonNode tagsNode = request.path("Tags");
+            if (!tagsNode.isArray()) {
+                throw new AwsException("BadRequestException", "Tags must be an array.", 400);
+            }
+            List<ConfigurationSet.Tag> tags = new ArrayList<>();
+            for (JsonNode t : tagsNode) {
+                String key = t.path("Key").asText(null);
+                String value = t.path("Value").asText(null);
+                tags.add(new ConfigurationSet.Tag(key, value));
+            }
+            sesService.tagResource(arn, region, tags);
+            LOG.infov("SES V2 TagResource: {0}", arn);
+            return Response.ok(objectMapper.createObjectNode()).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @DELETE
+    @Path("/tags")
+    public Response untagResource(@QueryParam("ResourceArn") String arn,
+                                   @QueryParam("TagKeys") List<String> tagKeys) {
+        try {
+            sesService.untagResource(arn, tagKeys);
+            LOG.infov("SES V2 UntagResource: {0}", arn);
+            return Response.ok(objectMapper.createObjectNode()).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
+        }
+    }
+
+    @GET
+    @Path("/tags")
+    public Response listTagsForResource(@QueryParam("ResourceArn") String arn) {
+        try {
+            List<ConfigurationSet.Tag> tags = sesService.listResourceTags(arn);
+            ObjectNode result = objectMapper.createObjectNode();
+            ArrayNode arr = result.putArray("Tags");
+            for (ConfigurationSet.Tag t : tags) {
+                ObjectNode tagNode = objectMapper.createObjectNode();
+                tagNode.put("Key", t.key());
+                tagNode.put("Value", t.value());
+                arr.add(tagNode);
+            }
+            return Response.ok(result).build();
+        } catch (AwsException e) {
+            throw remapV1Exception(e);
         }
     }
 
