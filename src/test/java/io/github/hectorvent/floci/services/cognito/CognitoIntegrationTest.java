@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hectorvent.floci.testing.RestAssuredJsonUtils;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
-import org.apache.commons.lang3.RandomStringUtils;
-import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -15,7 +13,6 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -1092,6 +1089,39 @@ class CognitoIntegrationTest {
                 .formParam("client_secret", oauthClientSecret)
         .when()
                 .post("/cognito-idp/oauth2/token");
+    }
+
+    @Test
+    @Order(91)
+    void adminCreateUserWithMessageActionResendRefreshesExistingUser() throws Exception {
+        JsonNode poolResponse = cognitoJson("CreateUserPool", """
+                { "PoolName": "ResendPool" }
+                """);
+        String resendPoolId = poolResponse.path("UserPool").path("Id").asText();
+        String resendUser = "resend-" + UUID.randomUUID();
+
+        cognitoAction("AdminCreateUser", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s",
+                  "TemporaryPassword": "TempPass1!",
+                  "UserAttributes": [ { "Name": "email", "Value": "resend@example.com" } ]
+                }
+                """.formatted(resendPoolId, resendUser))
+                .then()
+                .statusCode(200);
+
+        JsonNode resent = cognitoJson("AdminCreateUser", """
+                {
+                  "UserPoolId": "%s",
+                  "Username": "%s",
+                  "MessageAction": "RESEND",
+                  "UserAttributes": [ { "Name": "email", "Value": "resend@example.com" } ]
+                }
+                """.formatted(resendPoolId, resendUser));
+
+        assertEquals("FORCE_CHANGE_PASSWORD",
+                resent.path("User").path("UserStatus").asText());
     }
 
     private static Response cognitoAction(String action, String body) {

@@ -437,8 +437,41 @@ public class CognitoService {
 
     public CognitoUser adminCreateUser(String userPoolId, String username, Map<String, String> attributes,
                                        String temporaryPassword) {
+        return adminCreateUser(userPoolId, username, attributes, temporaryPassword, null);
+    }
+
+    /**
+     * AdminCreateUser with optional MessageAction.
+     *
+     * <p>{@code messageAction = "RESEND"} resends the invitation for an existing
+     * user in {@code FORCE_CHANGE_PASSWORD} status without recreating it; floci
+     * has no email transport, so this only refreshes {@code lastModifiedDate}.
+     * {@code "SUPPRESS"} or {@code null} retain the default create behavior.</p>
+     */
+    public CognitoUser adminCreateUser(String userPoolId,
+                                       String username,
+                                       Map<String, String> attributes,
+                                       String temporaryPassword,
+                                       String messageAction) {
         describeUserPool(userPoolId);
         String key = userKey(userPoolId, username);
+        boolean resend = "RESEND".equalsIgnoreCase(messageAction);
+
+        if (resend) {
+            CognitoUser existing = userStore.get(key)
+                    .orElseThrow(() -> new AwsException("UserNotFoundException", "User not found", 404));
+            if (!"FORCE_CHANGE_PASSWORD".equals(existing.getUserStatus())) {
+                final String userStateExceptionMessage = """
+                        User is in %s state and cannot be resent an invitation.
+                        """.formatted(existing.getUserStatus());
+                throw new AwsException("UnsupportedUserStateException", userStateExceptionMessage, 400);
+            }
+            existing.setLastModifiedDate(System.currentTimeMillis() / 1000L);
+            userStore.put(key, existing);
+            LOG.infov("Resent invitation for user {0} in pool {1}", username, userPoolId);
+            return existing;
+        }
+
         if (userStore.get(key).isPresent()) {
             throw new AwsException("UsernameExistsException", "User already exists", 400);
         }
