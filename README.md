@@ -279,6 +279,20 @@ Floci features a flexible storage architecture designed to balance developer pro
 
 For more details, visit the [Storage Configuration documentation](https://floci.io/floci/configuration/storage/).
 
+## Multi-Account Isolation
+
+Floci supports full per-account resource isolation with no extra configuration. If your AWS access key ID is **exactly 12 digits**, Floci uses it directly as the account ID — resources created by one account are completely invisible to another.
+
+```bash
+# Two accounts, full isolation — same queue name, separate namespaces
+AWS_ACCESS_KEY_ID=111111111111 aws sqs create-queue --queue-name orders
+AWS_ACCESS_KEY_ID=222222222222 aws sqs create-queue --queue-name orders
+```
+
+Any other key format (e.g. `test`, `AKIA…`) falls back to `FLOCI_DEFAULT_ACCOUNT_ID` (`000000000000` by default) — the standard single-account setup.
+
+→ [Multi-Account Isolation docs](https://floci.io/floci/configuration/multi-account/)
+
 ## Quick Start
 
 ```yaml

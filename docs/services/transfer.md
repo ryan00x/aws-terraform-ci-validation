@@ -47,13 +47,6 @@ AWS Transfer Family managed file transfer server management. This implementation
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    transfer:
-      enabled: true
-```
-
 | Environment variable | Default | Description |
 |---|---|---|
 | `FLOCI_SERVICES_TRANSFER_ENABLED` | `true` | Enable or disable Transfer Family |

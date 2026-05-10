@@ -20,14 +20,11 @@ Floci emulates Amazon MSK by orchestrating **Redpanda** containers. This provide
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    msk:
-      enabled: true
-      mock: false  # Set to true for metadata-only CRUD (no Docker)
-      default-image: "redpandadata/redpanda:latest"
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_MSK_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_SERVICES_MSK_MOCK` | `false` | `true` = metadata-only CRUD, no Docker containers |
+| `FLOCI_SERVICES_MSK_DEFAULT_IMAGE` | `redpandadata/redpanda:latest` | Docker image for Redpanda (Kafka) containers |
 
 ## How it works
 

@@ -108,19 +108,6 @@ The `S3Key` must be an **absolute path** reachable by the Docker daemon. When Fl
 
 Hot-reload must be enabled explicitly. By default it is disabled so that `S3Bucket=hot-reload` is treated as a regular S3 bucket name.
 
-```yaml
-floci:
-  services:
-    lambda:
-      hot-reload:
-        enabled: true                # Required — off by default
-        allowed-paths:               # Optional allowlist; omit to allow any absolute path
-          - /home/user/projects
-          - /tmp
-```
-
-Via environment variables:
-
 ```bash
 FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED=true
 
@@ -192,26 +179,21 @@ These AWS Lambda operations have no handler in Floci. Calls will return `404` or
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    lambda:
-      enabled: true
-      ephemeral: false                     # Remove container after each invocation
-      default-memory-mb: 128
-      default-timeout-seconds: 3
-      runtime-api-base-port: 9200
-      runtime-api-max-port: 9299
-      code-path: ./data/lambda-code        # ZIP storage location
-      poll-interval-ms: 1000
-      container-idle-timeout-seconds: 300  # Idle container cleanup
-      region-concurrency-limit: 1000       # Concurrent executions ceiling per region
-      unreserved-concurrency-min: 100      # Min unreserved capacity PutFunctionConcurrency must leave
-      hot-reload:
-        enabled: false                     # true = enable bind-mount hot-reload via S3Bucket=hot-reload
-        # allowed-paths:                   # Optional path allowlist (host paths that may be bind-mounted)
-        #   - /home/user/projects
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_LAMBDA_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_SERVICES_LAMBDA_EPHEMERAL` | `false` | Remove containers after each invocation |
+| `FLOCI_SERVICES_LAMBDA_DEFAULT_MEMORY_MB` | `128` | Default function memory (MB) |
+| `FLOCI_SERVICES_LAMBDA_DEFAULT_TIMEOUT_SECONDS` | `3` | Default function timeout (seconds) |
+| `FLOCI_SERVICES_LAMBDA_RUNTIME_API_BASE_PORT` | `9200` | First port in the Lambda Runtime API range |
+| `FLOCI_SERVICES_LAMBDA_RUNTIME_API_MAX_PORT` | `9299` | Last port in the Lambda Runtime API range |
+| `FLOCI_SERVICES_LAMBDA_CODE_PATH` | `./data/lambda-code` | Directory where Lambda ZIP files are stored |
+| `FLOCI_SERVICES_LAMBDA_POLL_INTERVAL_MS` | `1000` | Event-source mapping poll interval (milliseconds) |
+| `FLOCI_SERVICES_LAMBDA_CONTAINER_IDLE_TIMEOUT_SECONDS` | `300` | Idle container shutdown timeout (seconds) |
+| `FLOCI_SERVICES_LAMBDA_REGION_CONCURRENCY_LIMIT` | `1000` | Maximum concurrent executions per region |
+| `FLOCI_SERVICES_LAMBDA_UNRESERVED_CONCURRENCY_MIN` | `100` | Minimum unreserved capacity `PutFunctionConcurrency` must leave |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED` | `false` | Enable bind-mount hot-reload via `S3Bucket=hot-reload` |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ALLOWED_PATHS` | *(unset)* | Comma-separated allowlist of host paths that may be bind-mounted |
 
 ### Docker socket requirement
 
@@ -269,13 +251,6 @@ non-root user) can bind UDP/53 without any changes to your Compose file.
 If your Lambda functions have `AWS_ENDPOINT_URL=http://localhost.localstack.cloud:4566`
 hardcoded, add the LocalStack suffix to Floci's DNS resolver so it resolves to
 Floci's IP without any function-side changes:
-
-```yaml
-floci:
-  dns:
-    extra-suffixes:
-      - localhost.localstack.cloud
-```
 
 Via environment variable — use a comma-separated list for multiple suffixes:
 

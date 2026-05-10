@@ -61,13 +61,16 @@ nav:
     - AWS CLI & SDK Setup: getting-started/aws-setup.md
     - Migrate from LocalStack: getting-started/migrate-from-localstack.md
   - Configuration:
+    - Environment Variables: configuration/environment-variables.md
     - Docker Images: configuration/docker-images.md
     - Docker Compose: configuration/docker-compose.md
     - Ports Reference: configuration/ports.md
-    - application.yml Reference: configuration/application-yml.md
+    - Multi-Account Isolation: configuration/multi-account.md
     - Storage Modes: configuration/storage.md
     - TLS / HTTPS: configuration/tls.md
     - Initialization Hooks: configuration/initialization-hooks.md
+    - Advanced:
+      - application.yml Reference: configuration/advanced/application-yml.md
   - Services:
     - Overview: services/index.md
     - SSM Parameter Store: services/ssm.md

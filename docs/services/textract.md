@@ -36,12 +36,9 @@ Every block includes: `Id` (UUID), `Confidence` (99.9), `Page` (1), and a `Geome
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    textract:
-      enabled: true
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_TEXTRACT_ENABLED` | `true` | Enable or disable the service |
 
 ## Examples
 

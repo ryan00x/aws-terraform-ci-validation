@@ -31,6 +31,12 @@
 | `EnableKeyRotation` | Enable automatic key rotation (symmetric keys only) |
 | `DisableKeyRotation` | Disable automatic key rotation |
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_KMS_ENABLED` | `true` | Enable or disable the service |
+
 ## Examples
 
 ```bash

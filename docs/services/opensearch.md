@@ -79,27 +79,6 @@ services:
 
 ## Configuration
 
-```yaml title="application.yml"
-floci:
-  services:
-    opensearch:
-      enabled: true
-      mock: false                                   # true = metadata only, no Docker
-      default-image: "opensearchproject/opensearch:2"
-      proxy-base-port: 9400                         # port range for real-mode containers
-      proxy-max-port: 9499
-      keep-running-on-shutdown: false               # leave containers running after Floci stops
-      # data-path is derived from floci.storage.persistent-path/opensearch
-      # docker network is shared with all other services via floci.services.docker-network
-
-  storage:
-    services:
-      opensearch:
-        flush-interval-ms: 5000                     # flush interval when using hybrid/wal storage
-```
-
-### Environment Variables
-
 | Variable | Default | Description |
 |---|---|---|
 | `FLOCI_SERVICES_OPENSEARCH_ENABLED` | `true` | Enable/disable the service |

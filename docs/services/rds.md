@@ -27,17 +27,14 @@ Floci manages real PostgreSQL, MySQL, and MariaDB Docker containers and proxies 
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    rds:
-      enabled: true
-      proxy-base-port: 7001
-      proxy-max-port: 7099
-      default-postgres-image: "postgres:16-alpine"
-      default-mysql-image: "mysql:8.0"
-      default-mariadb-image: "mariadb:11"
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_RDS_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_SERVICES_RDS_PROXY_BASE_PORT` | `7000` | First host port in the RDS proxy range |
+| `FLOCI_SERVICES_RDS_PROXY_MAX_PORT` | `7099` | Last host port in the RDS proxy range |
+| `FLOCI_SERVICES_RDS_DEFAULT_POSTGRES_IMAGE` | `postgres:16-alpine` | Docker image for PostgreSQL instances |
+| `FLOCI_SERVICES_RDS_DEFAULT_MYSQL_IMAGE` | `mysql:8.0` | Docker image for MySQL instances |
+| `FLOCI_SERVICES_RDS_DEFAULT_MARIADB_IMAGE` | `mariadb:11` | Docker image for MariaDB instances |
 
 ### Docker Compose
 

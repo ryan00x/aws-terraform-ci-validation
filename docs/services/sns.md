@@ -25,6 +25,14 @@
 | `UntagResource` | Remove tags from a topic |
 | `ListTagsForResource` | List tags on a topic |
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_SNS_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_STORAGE_SERVICES_SNS_MODE` | *(global default)* | Storage mode override for SNS (`memory`, `persistent`, `hybrid`, `wal`) |
+| `FLOCI_STORAGE_SERVICES_SNS_FLUSH_INTERVAL_MS` | `5000` | Flush interval for `hybrid`/`wal` storage modes (milliseconds) |
+
 ## Examples
 
 ```bash

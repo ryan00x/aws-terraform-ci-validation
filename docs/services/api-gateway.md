@@ -102,6 +102,13 @@ curl http://localhost:4566/restapis/$API_ID/dev/_user_request_/users
 
 ---
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_APIGATEWAY_ENABLED` | `true` | Enable or disable API Gateway v1 (REST APIs) |
+| `FLOCI_SERVICES_APIGATEWAYV2_ENABLED` | `true` | Enable or disable API Gateway v2 (HTTP and WebSocket APIs) |
+
 ## API Gateway v2 (HTTP and WebSocket APIs) {#v2}
 
 **Protocol:** REST JSON

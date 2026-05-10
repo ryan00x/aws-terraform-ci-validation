@@ -48,16 +48,13 @@ ns-4.awsdns-04.co.uk
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    route53:
-      enabled: true
-      default-nameserver1: ns-1.awsdns-01.org
-      default-nameserver2: ns-2.awsdns-02.net
-      default-nameserver3: ns-3.awsdns-03.com
-      default-nameserver4: ns-4.awsdns-04.co.uk
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_ROUTE53_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_SERVICES_ROUTE53_DEFAULT_NAMESERVER1` | `ns-1.awsdns-01.org` | First default nameserver returned in delegation sets |
+| `FLOCI_SERVICES_ROUTE53_DEFAULT_NAMESERVER2` | `ns-2.awsdns-02.net` | Second default nameserver |
+| `FLOCI_SERVICES_ROUTE53_DEFAULT_NAMESERVER3` | `ns-3.awsdns-03.com` | Third default nameserver |
+| `FLOCI_SERVICES_ROUTE53_DEFAULT_NAMESERVER4` | `ns-4.awsdns-04.co.uk` | Fourth default nameserver |
 
 ## CLI Examples
 

@@ -47,23 +47,6 @@ services:
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    eks:
-      enabled: true
-      mock: false                          # true = metadata only, no Docker
-      provider: k3s                        # only k3s is supported
-      default-image: "rancher/k3s:latest"
-      api-server-base-port: 6500           # first port in the k3s API server range
-      api-server-max-port: 6599
-      data-path: ./data/eks                # host bind-mount root for cluster data
-      docker-network: ""                   # inherits floci.services.docker-network if unset
-      keep-running-on-shutdown: false      # leave k3s containers running after Floci stops
-```
-
-### Environment Variables
-
 | Variable | Default | Description |
 |---|---|---|
 | `FLOCI_SERVICES_EKS_ENABLED` | `true` | Enable the EKS service |

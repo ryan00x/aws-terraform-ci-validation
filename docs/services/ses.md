@@ -45,20 +45,6 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    ses:
-      enabled: true
-      # smtp-host: mailpit        # SMTP server for email relay (empty = store only)
-      # smtp-port: 1025
-      # smtp-user: ""
-      # smtp-pass: ""
-      # smtp-starttls: DISABLED   # DISABLED, OPTIONAL, or REQUIRED
-```
-
-### Environment Variables
-
 | Variable | Default | Description |
 |---|---|---|
 | `FLOCI_SERVICES_SES_ENABLED` | `true` | Enable or disable the SES service |

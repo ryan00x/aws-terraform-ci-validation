@@ -80,11 +80,8 @@ When a job reaches `COMPLETED`:
 
 The completion delay is configurable:
 
-```yaml
-floci:
-  services:
-    backup:
-      job-completion-delay-seconds: 3   # default
+```bash
+FLOCI_SERVICES_BACKUP_JOB_COMPLETION_DELAY_SECONDS=3
 ```
 
 Use a shorter delay (e.g. `1`) in test environments to speed up job-completion assertions.

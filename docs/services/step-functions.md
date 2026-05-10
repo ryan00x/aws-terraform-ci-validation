@@ -20,6 +20,12 @@
 | `SendTaskFailure` | Report task failure |
 | `SendTaskHeartbeat` | Send a heartbeat for long-running tasks |
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_STEPFUNCTIONS_ENABLED` | `true` | Enable or disable the service |
+
 ## Examples
 
 ```bash

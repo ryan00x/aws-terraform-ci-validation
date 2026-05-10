@@ -22,6 +22,12 @@
 | `ListTargetsByRule` | List targets for a rule |
 | `PutEvents` | Publish custom events to an event bus |
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_EVENTBRIDGE_ENABLED` | `true` | Enable or disable the service |
+
 ## Examples
 
 ```bash

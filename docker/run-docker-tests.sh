@@ -48,16 +48,12 @@ for suite in "${SUITES[@]}"; do
   # Build
   docker build -q -t "$IMAGE_NAME" "compatibility-tests/$suite"
   
-  EXTRA_ARGS=""
-  if [ "$suite" = "compat-cdk" ]; then
-    EXTRA_ARGS="-v /var/run/docker.sock:/var/run/docker.sock --group-add $DOCKER_GID"
-  fi
-
   # Run
   docker run --rm --network "$NETWORK" \
     -e FLOCI_ENDPOINT=http://floci:4566 \
     -v "$(pwd)/test-results:/results" \
-    $EXTRA_ARGS \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    --group-add "$DOCKER_GID" \
     "$IMAGE_NAME" || echo "Test suite $suite failed"
 done
 
