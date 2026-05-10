@@ -103,7 +103,7 @@ services:
 
 With this setting Floci returns URLs like `http://floci:4566/000000000000/my-queue` that other containers can reach.
 
-This also ensures that Lambda containers Floci spawns into your Compose network receive a reachable endpoint, and that response fields such as SQS `QueueUrl` use the Docker service name instead of `localhost`.
+Floci automatically attaches Lambda containers it spawns to the same Compose network when no explicit Docker network is configured. Setting `FLOCI_HOSTNAME` ensures those containers receive a reachable endpoint, and that response fields such as SQS `QueueUrl` use the Docker service name instead of `localhost`.
 
 Fields affected:
 

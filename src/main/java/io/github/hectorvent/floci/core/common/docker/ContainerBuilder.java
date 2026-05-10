@@ -38,13 +38,21 @@ public class ContainerBuilder {
     private final EmulatorConfig config;
     private final DockerHostResolver dockerHostResolver;
     private final EmbeddedDnsServer embeddedDnsServer;
+    private final CurrentContainerNetworkResolver currentContainerNetworkResolver;
 
     @Inject
     public ContainerBuilder(EmulatorConfig config, DockerHostResolver dockerHostResolver,
-                            EmbeddedDnsServer embeddedDnsServer) {
+                            EmbeddedDnsServer embeddedDnsServer,
+                            CurrentContainerNetworkResolver currentContainerNetworkResolver) {
         this.config = config;
         this.dockerHostResolver = dockerHostResolver;
         this.embeddedDnsServer = embeddedDnsServer;
+        this.currentContainerNetworkResolver = currentContainerNetworkResolver;
+    }
+
+    public ContainerBuilder(EmulatorConfig config, DockerHostResolver dockerHostResolver,
+                            EmbeddedDnsServer embeddedDnsServer) {
+        this(config, dockerHostResolver, embeddedDnsServer, null);
     }
 
     /**
@@ -54,7 +62,7 @@ public class ContainerBuilder {
      * @return a new Builder instance
      */
     public Builder newContainer(String image) {
-        return new Builder(image, config, dockerHostResolver, embeddedDnsServer);
+        return new Builder(image, config, dockerHostResolver, embeddedDnsServer, currentContainerNetworkResolver);
     }
 
     /**
@@ -65,6 +73,7 @@ public class ContainerBuilder {
         private final EmulatorConfig config;
         private final DockerHostResolver dockerHostResolver;
         private final EmbeddedDnsServer embeddedDnsServer;
+        private final CurrentContainerNetworkResolver currentContainerNetworkResolver;
 
         private String name;
         private final List<String> env = new ArrayList<>();
@@ -83,11 +92,13 @@ public class ContainerBuilder {
         private final List<String> dnsServers = new ArrayList<>();
 
         Builder(String image, EmulatorConfig config, DockerHostResolver dockerHostResolver,
-                EmbeddedDnsServer embeddedDnsServer) {
+                EmbeddedDnsServer embeddedDnsServer,
+                CurrentContainerNetworkResolver currentContainerNetworkResolver) {
             this.image = image;
             this.config = config;
             this.dockerHostResolver = dockerHostResolver;
             this.embeddedDnsServer = embeddedDnsServer;
+            this.currentContainerNetworkResolver = currentContainerNetworkResolver;
         }
 
         /**
@@ -202,10 +213,13 @@ public class ContainerBuilder {
          * This is the standard pattern for Floci container services.
          */
         public Builder withDockerNetwork(Optional<String> serviceNetwork) {
-            serviceNetwork
+            Optional<String> configuredNetwork = serviceNetwork
                     .or(() -> config.services().dockerNetwork())
                     .filter(n -> !n.isBlank())
-                    .ifPresent(n -> this.networkMode = n);
+                    .or(() -> currentContainerNetworkResolver != null
+                            ? currentContainerNetworkResolver.resolveNetworkName()
+                            : Optional.empty());
+            configuredNetwork.ifPresent(n -> this.networkMode = n);
             return this;
         }
 
