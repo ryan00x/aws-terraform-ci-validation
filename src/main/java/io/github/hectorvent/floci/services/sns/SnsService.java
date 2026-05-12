@@ -41,6 +41,7 @@ public class SnsService {
 
     private static final Logger LOG = Logger.getLogger(SnsService.class);
     private static final Duration FIFO_DEDUP_WINDOW = Duration.ofMinutes(5);
+    private static final int MAX_PUBLISH_SIZE = 262_144;
     private static final List<String> PENDING_CONFIRMATION_PROTOCOLS =
             List.of("http", "https", "email", "email-json", "sms");
 
@@ -273,6 +274,12 @@ public class SnsService {
     public String publish(String topicArn, String targetArn, String phoneNumber, String message,
                           String subject, Map<String, MessageAttributeValue> messageAttributes,
                           String messageGroupId, String messageDeduplicationId, String region) {
+        int payloadSize = computePublishSize(message, subject, messageAttributes);
+        if (payloadSize > MAX_PUBLISH_SIZE) {
+            throw new AwsException("InvalidParameterException",
+                    "Invalid parameter: Message too long", 400);
+        }
+
         // Send SMS
         if (phoneNumber != null) {
             return UUID.randomUUID().toString();
@@ -355,6 +362,21 @@ public class SnsService {
         String topicStoreKey = topicKey(region, topicArn);
         Topic topic = topicStore.get(topicStoreKey)
                 .orElseThrow(() -> new AwsException("NotFound", "Topic does not exist.", 404));
+
+        int batchSize = 0;
+        for (Map<String, Object> entry : entries) {
+            String message = (String) entry.get("Message");
+            String subject = (String) entry.get("Subject");
+            @SuppressWarnings("unchecked")
+            Map<String, MessageAttributeValue> attrs =
+                    (Map<String, MessageAttributeValue>) entry.get("MessageAttributes");
+            batchSize += computePublishSize(message, subject, attrs);
+        }
+        if (batchSize > MAX_PUBLISH_SIZE) {
+            throw new AwsException("BatchRequestTooLong",
+                    "Batch requests cannot be longer than " + MAX_PUBLISH_SIZE + " bytes.", 400);
+        }
+
         boolean isFifo = "true".equals(topic.getAttributes().get("FifoTopic"));
         List<String[]> successful = new ArrayList<>();
         List<String[]> failed = new ArrayList<>();
@@ -766,6 +788,32 @@ public class SnsService {
         if (arn.startsWith("http")) return arn;
         try { AwsArnUtils.parse(arn); } catch (IllegalArgumentException e) { return arn; }
         return AwsArnUtils.arnToQueueUrl(arn, baseUrl);
+    }
+
+    private static int computePublishSize(String message, String subject,
+                                          Map<String, MessageAttributeValue> attributes) {
+        int total = message == null ? 0 : message.getBytes(StandardCharsets.UTF_8).length;
+        if (subject != null) {
+            total += subject.getBytes(StandardCharsets.UTF_8).length;
+        }
+        if (attributes != null) {
+            for (Map.Entry<String, MessageAttributeValue> entry : attributes.entrySet()) {
+                total += entry.getKey().getBytes(StandardCharsets.UTF_8).length;
+                MessageAttributeValue value = entry.getValue();
+                if (value == null) {
+                    continue;
+                }
+                if (value.getDataType() != null) {
+                    total += value.getDataType().getBytes(StandardCharsets.UTF_8).length;
+                }
+                if (value.getBinaryValue() != null) {
+                    total += value.getBinaryValue().length;
+                } else if (value.getStringValue() != null) {
+                    total += value.getStringValue().getBytes(StandardCharsets.UTF_8).length;
+                }
+            }
+        }
+        return total;
     }
 
     private static String sha256(String message) {
