@@ -628,6 +628,60 @@ public class EventBridgeService {
 
     // ──────────────────────────── Pattern Matching ────────────────────────────
 
+    /**
+     * Tests whether a sample event matches a given event pattern, without firing any
+     * targets. Mirrors the AWS {@code TestEventPattern} API: callers pass the full event
+     * envelope (lowercase {@code source} / {@code detail-type} / {@code detail} /
+     * {@code resources}) as JSON; we adapt it to the internal entry shape and delegate
+     * to {@link #matchesPattern(Map, String)}.
+     */
+    public boolean testEventPattern(String eventPattern, String eventJson) {
+        if (eventPattern == null || eventPattern.isBlank()) {
+            throw new AwsException("InvalidEventPatternException", "EventPattern is required.", 400);
+        }
+        if (eventJson == null || eventJson.isBlank()) {
+            throw new AwsException("InvalidEventPatternException", "Event is required.", 400);
+        }
+        try {
+            objectMapper.readTree(eventPattern);
+        } catch (Exception e) {
+            throw new AwsException("InvalidEventPatternException",
+                    "Event pattern is not valid JSON: " + e.getMessage(), 400);
+        }
+        JsonNode event;
+        try {
+            event = objectMapper.readTree(eventJson);
+        } catch (Exception e) {
+            throw new AwsException("InvalidEventPatternException",
+                    "Event is not valid JSON: " + e.getMessage(), 400);
+        }
+        if (event == null || !event.isObject()) {
+            throw new AwsException("InvalidEventPatternException",
+                    "Event must be a JSON object.", 400);
+        }
+        Map<String, Object> entry = new HashMap<>();
+        if (event.hasNonNull("source")) {
+            entry.put("Source", event.get("source").asText());
+        }
+        if (event.hasNonNull("detail-type")) {
+            entry.put("DetailType", event.get("detail-type").asText());
+        }
+        if (event.hasNonNull("detail")) {
+            JsonNode detail = event.get("detail");
+            entry.put("Detail", detail.isTextual() ? detail.asText() : detail.toString());
+        }
+        if (event.hasNonNull("resources") && event.get("resources").isArray()) {
+            entry.put("Resources", event.get("resources"));
+        }
+        if (event.hasNonNull("account")) {
+            entry.put("Account", event.get("account").asText());
+        }
+        if (event.hasNonNull("region")) {
+            entry.put("Region", event.get("region").asText());
+        }
+        return matchesPattern(entry, eventPattern);
+    }
+
     boolean matchesPattern(Map<String, Object> event, String eventPattern) {
         if (eventPattern == null || eventPattern.isBlank()) {
             return true;
@@ -650,14 +704,20 @@ public class EventBridgeService {
             }
             JsonNode accountField = pattern.get("account");
             if (accountField != null && accountField.isArray()) {
-                String eventAccount = regionResolver.getAccountId();
+                // Prefer the entry's Account (set by TestEventPattern from the
+                // supplied event envelope); fall back to the caller's account
+                // for PutEvents rule dispatch, where the event always belongs
+                // to the caller.
+                String eventAccount = (String) event.getOrDefault(
+                        "Account", regionResolver.getAccountId());
                 if (!matchesArrayField(accountField, eventAccount)) {
                     return false;
                 }
             }
             JsonNode regionField = pattern.get("region");
             if (regionField != null && regionField.isArray()) {
-                String eventRegion = regionResolver.getDefaultRegion();
+                String eventRegion = (String) event.getOrDefault(
+                        "Region", regionResolver.getDefaultRegion());
                 if (!matchesArrayField(regionField, eventRegion)) {
                     return false;
                 }
