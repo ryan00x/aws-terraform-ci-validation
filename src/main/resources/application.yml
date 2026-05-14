@@ -260,3 +260,5 @@ floci:
       enabled: true
     pricing:
       enabled: true
+    transcribe:
+      enabled: true

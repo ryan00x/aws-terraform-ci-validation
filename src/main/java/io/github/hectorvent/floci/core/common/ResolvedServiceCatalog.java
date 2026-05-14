@@ -247,7 +247,11 @@ public class ResolvedServiceCatalog {
                 descriptor("pricing", "pricing", config.services().pricing().enabled(), true,
                         null, null, 5000L, null, ServiceProtocol.JSON,
                         protocols(ServiceProtocol.JSON),
-                        Set.of("AWSPriceListService."), Set.of("pricing", "api.pricing"), Set.of(), Set.of())
+                        Set.of("AWSPriceListService."), Set.of("pricing", "api.pricing"), Set.of(), Set.of()),
+                descriptor("transcribe", "transcribe", config.services().transcribe().enabled(), true,
+                        null, null, 5000L, null, ServiceProtocol.JSON,
+                        protocols(ServiceProtocol.JSON),
+                        Set.of("Transcribe."), Set.of("transcribe"), Set.of(), Set.of())
         ));
     }
 
