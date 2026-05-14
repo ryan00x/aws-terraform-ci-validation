@@ -277,27 +277,29 @@ class SqsServiceTest {
     }
 
     @Test
-    void fifoQueueReceiveRespectsGroupOrdering() {
+    void fifoQueueReceiveReturnsMultipleMessagesPerGroupInOrder() {
+        // AWS FIFO: a single ReceiveMessage call may return multiple messages
+        // from the same MessageGroupId (in order), up to MaxNumberOfMessages.
+        // The group lock only blocks subsequent ReceiveMessage calls.
         Queue queue = sqsService.createQueue("test.fifo", null);
         sqsService.sendMessage(queue.getQueueUrl(), "g1-msg1", 0, "group1", "d1");
         sqsService.sendMessage(queue.getQueueUrl(), "g1-msg2", 0, "group1", "d2");
         sqsService.sendMessage(queue.getQueueUrl(), "g2-msg1", 0, "group2", "d3");
 
-        // First receive: should get one message per group (first from each)
         List<Message> first = sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0);
-        assertEquals(2, first.size());
-        assertEquals("g1-msg1", first.get(0).getBody());
-        assertEquals("g2-msg1", first.get(1).getBody());
+        assertEquals(3, first.size(),
+                "Single FIFO ReceiveMessage should drain all visible messages up to MaxNumberOfMessages");
+        List<String> bodies = first.stream().map(Message::getBody).toList();
+        // Inter-group ordering is not guaranteed by FIFO; only within-group order is.
+        assertTrue(bodies.contains("g2-msg1"), "batch must contain group2 message");
+        int g1m1Idx = bodies.indexOf("g1-msg1");
+        int g1m2Idx = bodies.indexOf("g1-msg2");
+        assertTrue(g1m1Idx >= 0 && g1m2Idx >= 0, "batch must contain both group1 messages");
+        assertTrue(g1m1Idx < g1m2Idx, "group1 messages must be in insertion order");
 
-        // Second receive: group1 and group2 both have in-flight messages, so nothing returned
+        // Both groups are now in-flight; second call returns empty.
         List<Message> second = sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0);
         assertTrue(second.isEmpty());
-
-        // Delete the group1 message, then receive again — should get g1-msg2
-        sqsService.deleteMessage(queue.getQueueUrl(), first.get(0).getReceiptHandle());
-        List<Message> third = sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0);
-        assertEquals(1, third.size());
-        assertEquals("g1-msg2", third.get(0).getBody());
     }
 
     @Test
@@ -551,6 +553,47 @@ class SqsServiceTest {
         AwsException ex = assertThrows(AwsException.class, () ->
                 sqsService.removePermission(BASE_URL + "/000000000000/missing", "share", "us-east-1"));
         assertEquals("AWS.SimpleQueueService.NonExistentQueue", ex.getErrorCode());
+    }
+
+    @Test
+    void fifoQueueGroupLockBlocksAcrossCallsButNotWithin() {
+        Queue queue = sqsService.createQueue("group-lock.fifo", null);
+        for (int i = 1; i <= 5; i++) {
+            sqsService.sendMessage(queue.getQueueUrl(), "msg" + i, 0, "g1", "d" + i);
+        }
+
+        // First call drains all five from the single group.
+        List<Message> first = sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0);
+        assertEquals(5, first.size());
+
+        // Second call returns nothing because g1 is in-flight.
+        assertTrue(sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0).isEmpty());
+    }
+
+    @Test
+    void fifoQueueGroupUnlocksAfterAllInFlightMessagesDeleted() {
+        Queue queue = sqsService.createQueue("unlock-test.fifo", null);
+        sqsService.sendMessage(queue.getQueueUrl(), "msg1", 0, "g1", "d1");
+        sqsService.sendMessage(queue.getQueueUrl(), "msg2", 0, "g1", "d2");
+        sqsService.sendMessage(queue.getQueueUrl(), "msg3", 0, "g1", "d3");
+
+        // Partial drain: MaxNumberOfMessages=2 returns msg1 + msg2
+        List<Message> first = sqsService.receiveMessage(queue.getQueueUrl(), 2, 30, 0);
+        assertEquals(2, first.size());
+        assertEquals("msg1", first.get(0).getBody());
+        assertEquals("msg2", first.get(1).getBody());
+
+        // Group still locked — msg3 is not returned
+        assertTrue(sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0).isEmpty());
+
+        // Delete both in-flight messages → group unlocks
+        sqsService.deleteMessage(queue.getQueueUrl(), first.get(0).getReceiptHandle());
+        sqsService.deleteMessage(queue.getQueueUrl(), first.get(1).getReceiptHandle());
+
+        // Now msg3 should be available
+        List<Message> third = sqsService.receiveMessage(queue.getQueueUrl(), 10, 30, 0);
+        assertEquals(1, third.size());
+        assertEquals("msg3", third.get(0).getBody());
     }
 
     @Test
