@@ -301,6 +301,7 @@ public interface EmulatorConfig {
         TransferServiceConfig transfer();
         TextractServiceConfig textract();
         PricingServiceConfig pricing();
+        DuckConfig duck();
         TranscribeServiceConfig transcribe();
         CostExplorerServiceConfig ce();
     }
@@ -552,9 +553,11 @@ public interface EmulatorConfig {
 
         @WithDefault("false")
         boolean mock();
+    }
 
+    interface DuckConfig {
         /** When set, Floci uses this URL and skips floci-duck container management. */
-        Optional<String> duckUrl();
+        Optional<String> url();
 
         @WithDefault("floci/floci-duck:latest")
         String defaultImage();

@@ -187,7 +187,8 @@ floci:
     athena:
       enabled: true
       mock: false
-      # duck-url: http://floci-duck:3000   # set to skip container management
+    duck:
+      # url: http://floci-duck:3000   # set to skip container management
       default-image: "floci/floci-duck:latest"
     glue:
       enabled: true
