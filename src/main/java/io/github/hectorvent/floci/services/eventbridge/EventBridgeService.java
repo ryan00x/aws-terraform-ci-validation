@@ -177,6 +177,52 @@ public class EventBridgeService {
                         "EventBus not found: " + effectiveName, 404));
     }
 
+    public EventBus updateEventBus(String name,
+                                   String description,
+                                   String kmsKeyIdentifier,
+                                   String deadLetterConfig,
+                                   String logConfig,
+                                   String region) {
+        // Name identifies the bus; never mutated (AWS does not support rename).
+        String effectiveName = name == null || name.isBlank() ? "default" : name;
+        EventBus bus = "default".equals(effectiveName)
+                ? getOrCreateDefaultBus(region)
+                : busStore.get(busKey(region, effectiveName))
+                        .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                                "EventBus not found: " + effectiveName, 404));
+
+        // Only mark dirty when a field is both non-blank AND different from
+        // the value currently on the bus — re-sending the same value is a no-op.
+        boolean dirty = false;
+        if (description != null && !description.isBlank()
+                && !description.equals(bus.getDescription())) {
+            bus.setDescription(description);
+            dirty = true;
+        }
+        if (kmsKeyIdentifier != null && !kmsKeyIdentifier.isBlank()
+                && !kmsKeyIdentifier.equals(bus.getKmsKeyIdentifier())) {
+            bus.setKmsKeyIdentifier(kmsKeyIdentifier);
+            dirty = true;
+        }
+        if (deadLetterConfig != null && !deadLetterConfig.isBlank()
+                && !deadLetterConfig.equals(bus.getDeadLetterConfig())) {
+            bus.setDeadLetterConfig(deadLetterConfig);
+            dirty = true;
+        }
+        if (logConfig != null && !logConfig.isBlank()
+                && !logConfig.equals(bus.getLogConfig())) {
+            bus.setLogConfig(logConfig);
+            dirty = true;
+        }
+
+        if (dirty) {
+            busStore.put(busKey(region, effectiveName), bus);
+            LOG.infov("Updated event bus: {0} (arn={1}) in region {2}",
+                    effectiveName, bus.getArn(), region);
+        }
+        return bus;
+    }
+
     public List<EventBus> listEventBuses(String namePrefix, String region) {
         getOrCreateDefaultBus(region);
         String storagePrefix = "bus:" + region + ":";
