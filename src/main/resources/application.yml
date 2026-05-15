@@ -1,13 +1,11 @@
 quarkus:
   log:
-    # min-level sets the floor for what can be emitted at runtime. Default is INFO,
-    # which silently filters any TRACE/DEBUG logs even when a category override
-    # asks for them. Lowering the floor to TRACE lets users opt in per-category
-    # (e.g. QUARKUS_LOG_CATEGORY__IO_GITHUB_HECTORVENT_FLOCI_SERVICES_SQS__LEVEL=TRACE)
-    # without also having to raise min-level. Effective level is still INFO by default.
-    min-level: TRACE
     console:
-        color: true
+      format: "%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c{3.}] %s%e%n"
+    category:
+      "io.apicurio":
+        level: WARN
+
   http:
     port: ${floci.port}
     host: 0.0.0.0
@@ -44,6 +42,7 @@ quarkus:
       - --initialize-at-run-time=io.github.hectorvent.floci.services.cognito.CognitoSrpHelper
       - --initialize-at-run-time=io.github.hectorvent.floci.services.ses.SesService
       - --initialize-at-run-time=io.github.hectorvent.floci.services.route53.Route53Service
+      - --initialize-at-run-time=io.github.hectorvent.floci.services.kms.KmsService
 
 
 floci:
