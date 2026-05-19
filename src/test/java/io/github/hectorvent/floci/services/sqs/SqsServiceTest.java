@@ -596,6 +596,139 @@ class SqsServiceTest {
         assertEquals("msg3", third.get(0).getBody());
     }
 
+    private static String queueArn(String name) {
+        return "arn:aws:sqs:us-east-1:000000000000:" + name;
+    }
+
+    @Test
+    void startMessageMoveTask_storesTaskRetrievableByListMessageMoveTasks() {
+        sqsService.createQueue("orders-dlq", null);
+        String dlqArn = queueArn("orders-dlq");
+        sqsService.createQueue("orders",
+                Map.of("RedrivePolicy",
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"1\"}"));
+        sqsService.createQueue("orders-replay", null);
+        String destArn = queueArn("orders-replay");
+
+        String taskHandle = sqsService.startMessageMoveTask(dlqArn, destArn, 25, "us-east-1");
+
+        assertNotNull(taskHandle);
+        List<SqsService.MoveTask> tasks = sqsService.listMessageMoveTasks(dlqArn, "us-east-1");
+        SqsService.MoveTask task = tasks.get(0);
+        assertEquals(taskHandle, task.taskHandle());
+        assertEquals(dlqArn, task.sourceArn());
+        assertEquals(destArn, task.destinationArn());
+        assertEquals(25, task.maxNumberOfMessagesPerSecond());
+    }
+
+    @Test
+    void startMessageMoveTask_destinationDoesNotExist_throwsResourceNotFound() {
+        sqsService.createQueue("a-dlq", null);
+        String dlqArn = queueArn("a-dlq");
+        sqsService.createQueue("a",
+                Map.of("RedrivePolicy",
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"1\"}"));
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                sqsService.startMessageMoveTask(dlqArn, queueArn("nope"), 0, "us-east-1"));
+        assertEquals("ResourceNotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void startMessageMoveTask_sourceIsNotDeadLetterQueue_throwsInvalidParameterValue() {
+        sqsService.createQueue("just-a-queue", null);
+        sqsService.createQueue("dest", null);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                sqsService.startMessageMoveTask(queueArn("just-a-queue"),
+                        queueArn("dest"), 0, "us-east-1"));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+    }
+
+    @Test
+    void startMessageMoveTask_doesNotMatchSubstringOfAnotherQueueArn() {
+        // Regression: isDeadLetterQueue / listDeadLetterSourceQueues used to
+        // substring-match the raw RedrivePolicy JSON, so a queue named "foo"
+        // would be falsely treated as a DLQ when another queue's redrive policy
+        // referenced ":foo-bar". Now both look at the parsed deadLetterTargetArn.
+        sqsService.createQueue("dlq-real", null);
+        String realDlqArn = queueArn("dlq-real");
+        sqsService.createQueue("main-real",
+                Map.of("RedrivePolicy",
+                        "{\"deadLetterTargetArn\":\"" + realDlqArn + "\",\"maxReceiveCount\":\"1\"}"));
+
+        // Create a queue whose ARN is a strict prefix of realDlqArn.
+        sqsService.createQueue("dlq", null);
+        String prefixArn = queueArn("dlq");
+        sqsService.createQueue("dest", null);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                sqsService.startMessageMoveTask(prefixArn, queueArn("dest"), 0, "us-east-1"));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+
+        // listDeadLetterSourceQueues should also only return source queues whose
+        // redrive policy references the exact ARN, not a substring match.
+        assertEquals(0, sqsService.listDeadLetterSourceQueues(
+                sqsService.getQueueUrl("dlq", "us-east-1"), "us-east-1").size());
+        assertEquals(1, sqsService.listDeadLetterSourceQueues(
+                sqsService.getQueueUrl("dlq-real", "us-east-1"), "us-east-1").size());
+    }
+
+    @Test
+    void startMessageMoveTask_concurrentSecondTaskOnSameSource_throwsInvalidParameterValue() {
+        sqsService.createQueue("d-concurrent", null);
+        String dlqArn = queueArn("d-concurrent");
+        sqsService.createQueue("p-concurrent",
+                Map.of("RedrivePolicy",
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"1\"}"));
+        sqsService.createQueue("dest-concurrent", null);
+        String destArn = queueArn("dest-concurrent");
+
+        sqsService.startMessageMoveTask(dlqArn, destArn, 0, "us-east-1");
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                sqsService.startMessageMoveTask(dlqArn, destArn, 0, "us-east-1"));
+        assertEquals("InvalidParameterValue", ex.getErrorCode());
+        assertTrue(ex.getMessage().toLowerCase().contains("already a task running"));
+    }
+
+    @Test
+    void cancelMessageMoveTask_unknownHandle_throwsResourceNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                sqsService.cancelMessageMoveTask("task-does-not-exist", "us-east-1"));
+        assertEquals("ResourceNotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void cancelMessageMoveTask_knownHandle_stopsBackgroundWorker() throws Exception {
+        Queue dlq = sqsService.createQueue("d", null);
+        String dlqArn = queueArn("d");
+        sqsService.createQueue("p",
+                Map.of("RedrivePolicy",
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"1\"}"));
+        sqsService.createQueue("dest", null);
+        String destArn = queueArn("dest");
+
+        // Load enough messages that, at the throttled rate, the worker can't possibly
+        // drain the queue before cancel is observed.
+        for (int i = 0; i < 50; i++) {
+            sqsService.sendMessage(dlq.getQueueUrl(), "msg-" + i, 0, null, null);
+        }
+
+        String taskHandle = sqsService.startMessageMoveTask(dlqArn, destArn, 1, "us-east-1");
+        sqsService.cancelMessageMoveTask(taskHandle, "us-east-1");
+
+        // Give the worker a moment to observe the cancel and write the terminal status.
+        for (int i = 0; i < 50; i++) {
+            var status = sqsService.listMessageMoveTasks(dlqArn, "us-east-1").get(0).status();
+            if ("CANCELLED".equals(status)) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        fail("Move task did not transition to CANCELLED within timeout");
+    }
+
     @Test
     void fifoDedup_scopedToMessageGroup_acceptsSameDedupIdAcrossGroups() {
         Queue fifo = sqsService.createQueue("fair.fifo",
