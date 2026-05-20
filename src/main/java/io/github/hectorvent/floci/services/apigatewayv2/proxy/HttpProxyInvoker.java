@@ -41,7 +41,11 @@ public class HttpProxyInvoker {
     private static final Set<String> RESTRICTED = Set.of(
             "connection", "content-length", "expect", "host", "upgrade");
 
+    // Pin to HTTP/1.1: the default HTTP_2 setting attempts cleartext-HTTP/2 negotiation
+    // against http:// backends, which hangs against plain HTTP/1.1 servers (notably the
+    // in-JVM Vertx HttpServer used by ELBv2 listeners for HttpAlbIntegration).
     private final HttpClient client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();

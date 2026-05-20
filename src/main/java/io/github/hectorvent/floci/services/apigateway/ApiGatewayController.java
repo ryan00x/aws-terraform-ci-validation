@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.apigateway;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import io.github.hectorvent.floci.services.apigatewayv2.model.Model;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Route;
 import io.github.hectorvent.floci.services.apigatewayv2.model.RouteResponse;
 import io.github.hectorvent.floci.services.apigatewayv2.model.Stage;
+import io.github.hectorvent.floci.services.apigatewayv2.model.VpcLink;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -1028,6 +1030,49 @@ public class ApiGatewayController {
         }
     }
 
+    // ──────────────────────────── VPC Links (v2) ────────────────────────────
+
+    @POST
+    @Path("/v2/vpclinks")
+    public Response createVpcLink(@Context HttpHeaders headers, String body) {
+        String region = regionResolver.resolveRegion(headers);
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = objectMapper.readValue(body, Map.class);
+            VpcLink link = v2Service.createVpcLink(region, request);
+            return Response.status(201).entity(toV2VpcLinkNode(link).toString()).type(MediaType.APPLICATION_JSON).build();
+        } catch (IOException e) {
+            throw new AwsException("BadRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/v2/vpclinks")
+    public Response getVpcLinks(@Context HttpHeaders headers) {
+        String region = regionResolver.resolveRegion(headers);
+        List<VpcLink> links = v2Service.getVpcLinks(region);
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        links.forEach(l -> items.add(toV2VpcLinkNode(l)));
+        return Response.ok(root.toString()).type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @GET
+    @Path("/v2/vpclinks/{vpcLinkId}")
+    public Response getVpcLink(@Context HttpHeaders headers, @PathParam("vpcLinkId") String vpcLinkId) {
+        String region = regionResolver.resolveRegion(headers);
+        return Response.ok(toV2VpcLinkNode(v2Service.getVpcLink(region, vpcLinkId)).toString())
+                .type(MediaType.APPLICATION_JSON).build();
+    }
+
+    @DELETE
+    @Path("/v2/vpclinks/{vpcLinkId}")
+    public Response deleteVpcLink(@Context HttpHeaders headers, @PathParam("vpcLinkId") String vpcLinkId) {
+        String region = regionResolver.resolveRegion(headers);
+        v2Service.deleteVpcLink(region, vpcLinkId);
+        return Response.accepted().build();
+    }
+
     // ──────────────────────────── Route Responses (v2) ────────────────────────────
 
     @POST
@@ -1694,6 +1739,7 @@ public class ApiGatewayController {
         node.put("integrationId", i.getIntegrationId());
         node.put("integrationType", i.getIntegrationType());
         if (i.getConnectionType() != null) node.put("connectionType", i.getConnectionType());
+        if (i.getConnectionId() != null) node.put("connectionId", i.getConnectionId());
         node.put("payloadFormatVersion", i.getPayloadFormatVersion());
         if (i.getIntegrationUri() != null) node.put("integrationUri", i.getIntegrationUri());
         if (i.getRequestTemplates() != null) {
@@ -1716,6 +1762,29 @@ public class ApiGatewayController {
         }
         if (i.getTimeoutInMillis() != 0) {
             node.put("timeoutInMillis", i.getTimeoutInMillis());
+        }
+        return node;
+    }
+
+    private ObjectNode toV2VpcLinkNode(VpcLink v) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("vpcLinkId", v.getVpcLinkId());
+        if (v.getName() != null) node.put("name", v.getName());
+        if (v.getVpcLinkStatus() != null) node.put("vpcLinkStatus", v.getVpcLinkStatus());
+        node.put("vpcLinkVersion", "V2");
+        node.put("createdDate", Instant.ofEpochMilli(v.getCreatedDate()).toString());
+        if (v.getSubnetIds() != null) {
+            ArrayNode subnets = node.putArray("subnetIds");
+            v.getSubnetIds().forEach(subnets::add);
+        }
+        if (v.getSecurityGroupIds() != null) {
+            ArrayNode sgs = node.putArray("securityGroupIds");
+            v.getSecurityGroupIds().forEach(sgs::add);
+        }
+        if (v.getTags() != null && !v.getTags().isEmpty()) {
+            ObjectNode tagsNode = objectMapper.createObjectNode();
+            v.getTags().forEach(tagsNode::put);
+            node.set("tags", tagsNode);
         }
         return node;
     }
