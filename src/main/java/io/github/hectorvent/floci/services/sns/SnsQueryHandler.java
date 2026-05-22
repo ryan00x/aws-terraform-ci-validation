@@ -11,6 +11,7 @@ import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -183,13 +184,11 @@ public class SnsQueryHandler {
         String messageGroupId = getParam(params, "MessageGroupId");
         String messageDeduplicationId = getParam(params, "MessageDeduplicationId");
 
-        Map<String, MessageAttributeValue> attributes = new HashMap<>();
-        for (int i = 1; ; i++) {
-            String name = params.getFirst("MessageAttributes.entry." + i + ".Name");
-            if (name == null) break;
-            String value = params.getFirst("MessageAttributes.entry." + i + ".Value.StringValue");
-            String dataType = params.getFirst("MessageAttributes.entry." + i + ".Value.DataType");
-            if (value != null) attributes.put(name, new MessageAttributeValue(value, dataType != null ? dataType : "String"));
+        Map<String, MessageAttributeValue> attributes;
+        try {
+            attributes = parseMessageAttributes(params, "MessageAttributes.entry.");
+        } catch (AwsException e) {
+            return xmlErrorResponse(e.getErrorCode(), e.getMessage(), e.getHttpStatus());
         }
 
         try {
@@ -217,14 +216,11 @@ public class SnsQueryHandler {
             entry.put("MessageGroupId", getParam(params, entryPrefix + ".MessageGroupId"));
             entry.put("MessageDeduplicationId", getParam(params, entryPrefix + ".MessageDeduplicationId"));
 
-            Map<String, MessageAttributeValue> attributes = new HashMap<>();
-            for (int j = 1; ; j++) {
-                String attrPrefix = entryPrefix + ".MessageAttributes.entry." + j;
-                String name = params.getFirst(attrPrefix + ".Name");
-                if (name == null) break;
-                String value = params.getFirst(attrPrefix + ".Value.StringValue");
-                String dataType = params.getFirst(attrPrefix + ".Value.DataType");
-                if (value != null) attributes.put(name, new MessageAttributeValue(value, dataType != null ? dataType : "String"));
+            Map<String, MessageAttributeValue> attributes;
+            try {
+                attributes = parseMessageAttributes(params, entryPrefix + ".MessageAttributes.entry.");
+            } catch (AwsException e) {
+                return xmlErrorResponse(e.getErrorCode(), e.getMessage(), e.getHttpStatus());
             }
             if (!attributes.isEmpty()) entry.put("MessageAttributes", attributes);
             entries.add(entry);
@@ -359,6 +355,31 @@ public class SnsQueryHandler {
 
     private String getParam(MultivaluedMap<String, String> params, String name) {
         return params.getFirst(name);
+    }
+
+    private Map<String, MessageAttributeValue> parseMessageAttributes(
+            MultivaluedMap<String, String> params, String prefix) {
+        Map<String, MessageAttributeValue> attributes = new HashMap<>();
+        for (int i = 1; ; i++) {
+            String name = params.getFirst(prefix + i + ".Name");
+            if (name == null) break;
+            String value = params.getFirst(prefix + i + ".Value.StringValue");
+            String binaryValueBase64 = params.getFirst(prefix + i + ".Value.BinaryValue");
+            String dataType = params.getFirst(prefix + i + ".Value.DataType");
+            if (binaryValueBase64 != null) {
+                byte[] binaryValue;
+                try {
+                    binaryValue = Base64.getDecoder().decode(binaryValueBase64);
+                } catch (IllegalArgumentException e) {
+                    throw new AwsException("InvalidParameterValue",
+                            "Invalid binary value for message attribute '" + name + "': not valid base64.", 400);
+                }
+                attributes.put(name, new MessageAttributeValue(binaryValue, dataType != null ? dataType : "Binary"));
+            } else if (value != null) {
+                attributes.put(name, new MessageAttributeValue(value, dataType != null ? dataType : "String"));
+            }
+        }
+        return attributes;
     }
 
     Response xmlErrorResponse(String code, String message, int status) {
