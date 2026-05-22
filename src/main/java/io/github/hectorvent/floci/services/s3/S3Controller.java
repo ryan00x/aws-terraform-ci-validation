@@ -196,6 +196,10 @@ public class S3Controller {
                 s3Service.putBucketOwnershipControls(bucket, new String(body, StandardCharsets.UTF_8));
                 return Response.ok().build();
             }
+            if (hasQueryParam(uriInfo, "requestPayment")) {
+                s3Service.putBucketRequestPayment(bucket, new String(body, StandardCharsets.UTF_8));
+                return Response.ok().build();
+            }
 
             String locationConstraint = null;
             if (body != null && body.length > 0) {
@@ -333,6 +337,9 @@ public class S3Controller {
             }
             if (hasQueryParam(uriInfo, "ownershipControls")) {
                 return Response.ok(s3Service.getBucketOwnershipControls(bucket)).build();
+            }
+            if (hasQueryParam(uriInfo, "requestPayment")) {
+                return Response.ok(s3Service.getBucketRequestPayment(bucket)).build();
             }
 
             // --- Website Hosting Redirection Logic ---
