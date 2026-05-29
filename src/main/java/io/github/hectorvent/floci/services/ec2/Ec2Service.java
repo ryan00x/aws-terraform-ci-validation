@@ -650,9 +650,11 @@ public class Ec2Service {
     public void modifySubnetAttribute(String region, String subnetId, String attribute, String value) {
         ensureDefaultResources(region);
         Subnet subnet = getRequiredSubnet(region, subnetId);
-        
-        if ("mapPublicIpOnLaunch".equals(attribute)) {
-            subnet.setMapPublicIpOnLaunch(Boolean.parseBoolean(value));
+        switch (attribute) {
+            case "mapPublicIpOnLaunch"           -> subnet.setMapPublicIpOnLaunch(Boolean.parseBoolean(value));
+            case "assignIpv6AddressOnCreation"   -> subnet.setAssignIpv6AddressOnCreation(Boolean.parseBoolean(value));
+            case "enableDns64"                   -> subnet.setEnableDns64(Boolean.parseBoolean(value));
+            case "mapCustomerOwnedIpOnLaunch"    -> subnet.setMapCustomerOwnedIpOnLaunch(Boolean.parseBoolean(value));
         }
     }
 
