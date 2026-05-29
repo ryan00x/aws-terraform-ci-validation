@@ -240,6 +240,12 @@ public class ApiGatewayExecuteController {
             return dispatchV2(httpMethod, apiId, stageName, proxy, headers, uriInfo, body, region);
         }
 
+        // Resolve region for unsigned data-plane requests
+        String auth = headers.getHeaderString("Authorization");
+        if (auth == null || auth.isBlank()) {
+            region = apiGatewayService.resolveRestApiRegion(region, apiId);
+        }
+
         // Verify API and stage exist
         Stage stage;
         try {
