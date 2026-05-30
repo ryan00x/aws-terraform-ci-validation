@@ -4691,4 +4691,85 @@ class CloudFormationIntegrationTest {
             .body(containsString("nested-stack-child-queue"));
     }
 
+    // ── Issue #1072: AWS::ApiGatewayV2::Api WEBSOCKET drops RouteSelectionExpression ───
+
+    @Test
+    void createStack_apiGatewayV2WebSocketApi_forwardsRouteSelectionExpression() {
+        String template = """
+            {
+              "Resources": {
+                "MyWsApi": {
+                  "Type": "AWS::ApiGatewayV2::Api",
+                  "Properties": {
+                    "Name": "cfn-ws-api",
+                    "ProtocolType": "WEBSOCKET",
+                    "RouteSelectionExpression": "$request.body.action",
+                    "Description": "ws api created via cfn",
+                    "ApiKeySelectionExpression": "$request.header.x-custom-key",
+                    "CorsConfiguration": {
+                      "AllowOrigins": ["https://example.com"],
+                      "AllowMethods": ["GET", "POST"],
+                      "AllowHeaders": ["content-type"],
+                      "ExposeHeaders": ["x-request-id"],
+                      "MaxAge": 600,
+                      "AllowCredentials": true
+                    },
+                    "Tags": {
+                      "Environment": "test",
+                      "Owner": "floci"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "ws-api-stack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackId>"));
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", "ws-api-stack")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<LogicalResourceId>MyWsApi</LogicalResourceId>"))
+            .body(containsString("<ResourceStatus>CREATE_COMPLETE</ResourceStatus>"))
+            .body(not(containsString("CREATE_FAILED")));
+
+        String apisJson = given()
+            .header("X-Amz-Target", "AmazonApiGatewayV2.GetApis")
+            .contentType("application/x-amz-json-1.1")
+            .body("{}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+
+        assertThat(apisJson, containsString("\"Name\":\"cfn-ws-api\""));
+        assertThat(apisJson, containsString("\"ProtocolType\":\"WEBSOCKET\""));
+        assertThat(apisJson, containsString("\"RouteSelectionExpression\":\"$request.body.action\""));
+        assertThat(apisJson, containsString("\"Description\":\"ws api created via cfn\""));
+        assertThat(apisJson, containsString("\"ApiKeySelectionExpression\":\"$request.header.x-custom-key\""));
+        assertThat(apisJson, containsString("\"Environment\":\"test\""));
+        assertThat(apisJson, containsString("\"Owner\":\"floci\""));
+        assertThat(apisJson, containsString("\"AllowOrigins\":[\"https://example.com\"]"));
+        assertThat(apisJson, containsString("\"AllowMethods\":[\"GET\",\"POST\"]"));
+        assertThat(apisJson, containsString("\"AllowHeaders\":[\"content-type\"]"));
+        assertThat(apisJson, containsString("\"ExposeHeaders\":[\"x-request-id\"]"));
+        assertThat(apisJson, containsString("\"MaxAge\":600"));
+        assertThat(apisJson, containsString("\"AllowCredentials\":true"));
+    }
+
 }

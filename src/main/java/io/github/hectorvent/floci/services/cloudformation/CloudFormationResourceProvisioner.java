@@ -1530,10 +1530,66 @@ public class CloudFormationResourceProvisioner {
         Map<String, Object> req = new HashMap<>();
         req.put("name", name);
         req.put("protocolType", resolveOrDefault(props, "ProtocolType", engine, "HTTP"));
+        req.put("routeSelectionExpression", resolveOptional(props, "RouteSelectionExpression", engine));
+        req.put("description", resolveOptional(props, "Description", engine));
+        req.put("apiKeySelectionExpression", resolveOptional(props, "ApiKeySelectionExpression", engine));
+
+        Map<String, String> tags = parseApiGatewayV2Tags(props != null ? props.get("Tags") : null, engine);
+        if (!tags.isEmpty()) {
+            req.put("tags", tags);
+        }
+
+        Map<String, Object> cors = parseApiGatewayV2Cors(props != null ? props.get("CorsConfiguration") : null, engine);
+        if (cors != null) {
+            req.put("corsConfiguration", cors);
+        }
 
         Api api = apiGatewayV2Service.createApi(region, req);
         r.setPhysicalId(api.getApiId());
         r.getAttributes().put("ApiEndpoint", api.getApiEndpoint());
+    }
+
+    private Map<String, String> parseApiGatewayV2Tags(JsonNode tagsNode, CloudFormationTemplateEngine engine) {
+        Map<String, String> out = new HashMap<>();
+        if (tagsNode == null || tagsNode.isNull()) {
+            return out;
+        }
+        JsonNode resolved = engine.resolveNode(tagsNode);
+        if (!resolved.isObject()) {
+            return out;
+        }
+        resolved.properties().forEach(e -> out.put(e.getKey(), e.getValue().asText("")));
+        return out;
+    }
+
+    private Map<String, Object> parseApiGatewayV2Cors(JsonNode corsNode, CloudFormationTemplateEngine engine) {
+        if (corsNode == null || corsNode.isNull()) {
+            return null;
+        }
+        JsonNode resolved = engine.resolveNode(corsNode);
+        if (!resolved.isObject()) {
+            return null;
+        }
+        Map<String, Object> out = new HashMap<>();
+        resolved.properties().forEach(e -> {
+            String key = e.getKey();
+            String camel = key.isEmpty() || !Character.isUpperCase(key.charAt(0))
+                    ? key
+                    : Character.toLowerCase(key.charAt(0)) + key.substring(1);
+            JsonNode v = e.getValue();
+            if (v.isArray()) {
+                List<String> list = new ArrayList<>();
+                v.forEach(item -> list.add(item.asText()));
+                out.put(camel, list);
+            } else if (v.isBoolean()) {
+                out.put(camel, v.booleanValue());
+            } else if (v.isNumber()) {
+                out.put(camel, v.numberValue());
+            } else if (!v.isNull()) {
+                out.put(camel, v.asText());
+            }
+        });
+        return out;
     }
 
     private void provisionApiGatewayV2Route(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
