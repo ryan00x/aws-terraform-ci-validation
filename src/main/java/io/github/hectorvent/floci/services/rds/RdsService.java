@@ -18,7 +18,6 @@ import io.github.hectorvent.floci.services.rds.model.DbInstance;
 import io.github.hectorvent.floci.services.rds.model.DbInstanceStatus;
 import io.github.hectorvent.floci.services.rds.model.DbParameterGroup;
 import io.github.hectorvent.floci.services.rds.proxy.RdsProxyManager;
-import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -89,8 +88,7 @@ public class RdsService {
         this.clusterParameterGroups = clusterParameterGroups;
     }
 
-    @PostConstruct
-    void restorePersistedRuntime() {
+    public void restorePersistedRuntime() {
         restoreClusters();
         restoreInstances();
     }
