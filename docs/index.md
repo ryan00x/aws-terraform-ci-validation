@@ -12,7 +12,7 @@ Floci is a fast, free, and open-source local AWS service emulator built for deve
 
 ## Supported Services
 
-Floci emulates 51 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
+Floci emulates 52 AWS services. See the [Services Overview](services/index.md) for per-service operation counts, endpoints, and full protocol details.
 
 | Service | Protocol |
 |---|---|
@@ -25,6 +25,7 @@ Floci emulates 51 AWS services. See the [Services Overview](services/index.md) f
 | DynamoDB + Streams | JSON 1.1 |
 | Lambda | REST JSON |
 | API Gateway v1 & v2 | REST JSON |
+| AppSync | REST JSON |
 | Cognito | JSON 1.1 |
 | KMS | JSON 1.1 |
 | Kinesis | JSON 1.1 |

@@ -189,7 +189,7 @@ flowchart LR
         Router["HTTP Router\nJAX-RS / Vert.x"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM · Config\nAPI Gateway · ELB v2 · Auto Scaling\nCodeDeploy · Backup · Bedrock Runtime · Route53 · Transfer"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM · Config\nAPI Gateway · AppSync · ELB v2 · Auto Scaling\nCodeDeploy · Backup · Bedrock Runtime · Route53 · Transfer"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -220,7 +220,7 @@ Floci supports local emulation for application services, data services, eventing
 |---|---|
 | Core app services | S3, SQS, SNS, DynamoDB, Lambda, IAM, STS, KMS, Secrets Manager |
 | Events and workflows | EventBridge, EventBridge Pipes, EventBridge Scheduler, Step Functions, CloudWatch Logs, CloudWatch Metrics |
-| API and identity | API Gateway REST, API Gateway v2, Cognito, ACM, Route53 |
+| API and identity | API Gateway REST, API Gateway v2, AppSync, Cognito, ACM, Route53 |
 | Containers and compute | ECS, EC2, EKS, CodeBuild, CodeDeploy, Auto Scaling, ELB v2 |
 | Graph database | Neptune |
 | Data and analytics | Athena, Glue, Firehose, OpenSearch, Textract |
@@ -245,6 +245,7 @@ For operation-level compatibility, see the [Services Overview](https://floci.io/
 | Lambda | Real Docker | Runtime environment, execution model, warm container pool, aliases, Function URLs |
 | API Gateway REST | In-process | Resources, methods, stages, Lambda proxy, MOCK integrations, AWS integrations |
 | API Gateway v2 | In-process | HTTP APIs, routes, integrations, JWT authorizers, stages |
+| AppSync | In-process | GraphQL API management API, schema registry, AWS scalars, domain names, channel namespaces |
 | IAM | In-process | Users, roles, groups, policies, instance profiles, access keys |
 | STS | In-process | AssumeRole, WebIdentity, SAML, GetFederationToken, GetSessionToken |
 | Cognito | In-process | User pools, app clients, auth flows, JWKS and OpenID well-known endpoints |
