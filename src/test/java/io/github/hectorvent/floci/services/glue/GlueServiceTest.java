@@ -16,6 +16,7 @@ import io.github.hectorvent.floci.services.glue.model.UserDefinedFunction;
 import io.github.hectorvent.floci.services.glue.schemaregistry.GlueSchemaRegistryService;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.RegistryId;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaId;
+import io.github.hectorvent.floci.services.resourcegroupstagging.ResourceGroupsTaggingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -63,7 +64,7 @@ class GlueServiceTest {
                 tableVersionStore,
                 partitionStore,
                 new InMemoryStorage<String, UserDefinedFunction>(),
-                schemaRegistryService, regionResolver);
+                schemaRegistryService, regionResolver, new ResourceGroupsTaggingService());
         glueService.createDatabase(new Database("db1"));
     }
 
