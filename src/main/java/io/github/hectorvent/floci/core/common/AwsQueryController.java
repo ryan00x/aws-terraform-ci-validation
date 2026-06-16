@@ -168,7 +168,8 @@ public class AwsQueryController {
             "DescribeInstanceTypes", "DescribeInstanceTypeOfferings",
             "CreateLaunchTemplate", "CreateLaunchTemplateVersion", "DescribeLaunchTemplates", "DescribeLaunchTemplateVersions",
             "ModifyLaunchTemplate", "DeleteLaunchTemplate",
-            "DescribeNetworkInterfaces"
+            "DescribeNetworkInterfaces",
+            "CreateVolume", "DescribeVolumes", "DeleteVolume"
     );
 
     private final CloudFormationQueryHandler cloudFormationQueryHandler;
@@ -240,7 +241,8 @@ public class AwsQueryController {
 
         String action = formParams.getFirst("Action");
         if (action == null) {
-            return null;
+            return xmlErrorResponse("MissingAction",
+                    "The request must contain the parameter Action", 400);
         }
 
         String service = resolveService(authorization, action);
