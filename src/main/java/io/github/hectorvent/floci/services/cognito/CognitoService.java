@@ -24,6 +24,7 @@ import java.util.*;
 
 @ApplicationScoped
 public class CognitoService {
+    private static final int DEFAULT_REFRESH_TOKEN_VALIDITY_DAYS = 30;
 
     private static final Logger LOG = Logger.getLogger(CognitoService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -304,30 +305,54 @@ public class CognitoService {
             Boolean enableTokenRevocation) {
         describeUserPool(userPoolId);
         String clientId = UUID.randomUUID().toString().replace("-", "").substring(0, 26);
+        List<String> normalizedAllowedOAuthFlows = normalizeStringList(allowedOAuthFlows);
+        List<String> normalizedAllowedOAuthScopes = normalizeStringList(allowedOAuthScopes);
+        List<String> normalizedCallbackUrls = normalizeStringList(callbackURLs);
+        String normalizedDefaultRedirectUri = normalizeOptionalString(defaultRedirectURI);
+        List<String> normalizedExplicitAuthFlows = normalizeStringList(explicitAuthFlows);
+        List<String> normalizedLogoutUrls = normalizeStringList(logoutURLs);
+        List<String> normalizedReadAttributes = normalizeStringList(readAttributes);
+        List<String> normalizedSupportedIdentityProviders = normalizeStringList(supportedIdentityProviders);
+        Map<String, String> copiedTokenValidityUnits = copyStringMap(tokenValidityUnits);
+        List<String> normalizedWriteAttributes = normalizeStringList(writeAttributes);
+        Integer normalizedRefreshTokenValidity = normalizeRefreshTokenValidity(refreshTokenValidity);
+
+        validateUserPoolClientConfiguration(
+                allowedOAuthFlowsUserPoolClient,
+                normalizedAllowedOAuthFlows,
+                normalizedAllowedOAuthScopes,
+                normalizedCallbackUrls,
+                normalizedDefaultRedirectUri,
+                accessTokenValidity,
+                idTokenValidity,
+                normalizedRefreshTokenValidity,
+                normalizedLogoutUrls,
+                copiedTokenValidityUnits
+        );
+
         UserPoolClient client = new UserPoolClient();
         client.setClientId(clientId);
         client.setUserPoolId(userPoolId);
         client.setClientName(clientName);
         client.setGenerateSecret(generateSecret);
         client.setAllowedOAuthFlowsUserPoolClient(allowedOAuthFlowsUserPoolClient);
-        client.setAllowedOAuthFlows(normalizeStringList(allowedOAuthFlows));
-        client.setAllowedOAuthScopes(normalizeStringList(allowedOAuthScopes));
+        client.setAllowedOAuthFlows(normalizedAllowedOAuthFlows);
+        client.setAllowedOAuthScopes(normalizedAllowedOAuthScopes);
         client.setAnalyticsConfiguration(copyObjectMap(analyticsConfiguration));
-        client.setCallbackURLs(normalizeStringList(callbackURLs));
-        client.setDefaultRedirectURI(defaultRedirectURI);
-        client.setExplicitAuthFlows(normalizeStringList(explicitAuthFlows));
+        client.setCallbackURLs(normalizedCallbackUrls);
+        client.setDefaultRedirectURI(normalizedDefaultRedirectUri);
+        client.setExplicitAuthFlows(normalizedExplicitAuthFlows);
         client.setAccessTokenValidity(accessTokenValidity);
         client.setIdTokenValidity(idTokenValidity);
-        client.setLogoutURLs(normalizeStringList(logoutURLs));
+        client.setLogoutURLs(normalizedLogoutUrls);
         client.setPreventUserExistenceErrors(preventUserExistenceErrors);
-        client.setReadAttributes(normalizeStringList(readAttributes));
-        client.setRefreshTokenValidity(refreshTokenValidity);
-        List<String> normalizedSupportedIdentityProviders = normalizeStringList(supportedIdentityProviders);
+        client.setReadAttributes(normalizedReadAttributes);
+        client.setRefreshTokenValidity(normalizedRefreshTokenValidity);
         client.setSupportedIdentityProviders(normalizedSupportedIdentityProviders.isEmpty()
                 ? List.of("COGNITO")
                 : normalizedSupportedIdentityProviders);
-        client.setTokenValidityUnits(copyStringMap(tokenValidityUnits));
-        client.setWriteAttributes(normalizeStringList(writeAttributes));
+        client.setTokenValidityUnits(copiedTokenValidityUnits);
+        client.setWriteAttributes(normalizedWriteAttributes);
         client.setRefreshTokenRotation(copyObjectMap(refreshTokenRotation));
         client.setEnableTokenRevocation(enableTokenRevocation != null ? enableTokenRevocation : Boolean.TRUE);
         if (generateSecret) {
@@ -420,24 +445,68 @@ public class CognitoService {
                                                Map<String, Object> refreshTokenRotation,
                                                Boolean enableTokenRevocation) {
         UserPoolClient client = describeUserPoolClient(userPoolId, clientId);
+        boolean effectiveAllowedOAuthFlowsUserPoolClient = allowedOAuthFlowsUserPoolClient != null
+                ? allowedOAuthFlowsUserPoolClient
+                : client.isAllowedOAuthFlowsUserPoolClient();
+        List<String> effectiveAllowedOAuthFlows = allowedOAuthFlows != null
+                ? normalizeStringList(allowedOAuthFlows)
+                : client.getAllowedOAuthFlows();
+        List<String> effectiveAllowedOAuthScopes = allowedOAuthScopes != null
+                ? normalizeStringList(allowedOAuthScopes)
+                : client.getAllowedOAuthScopes();
+        List<String> effectiveCallbackUrls = callbackURLs != null
+                ? normalizeStringList(callbackURLs)
+                : client.getCallbackURLs();
+        String effectiveDefaultRedirectUri = defaultRedirectURI != null
+                ? normalizeOptionalString(defaultRedirectURI)
+                : client.getDefaultRedirectURI();
+        Integer effectiveAccessTokenValidity = accessTokenValidity != null
+                ? accessTokenValidity
+                : client.getAccessTokenValidity();
+        Integer effectiveIdTokenValidity = idTokenValidity != null
+                ? idTokenValidity
+                : client.getIdTokenValidity();
+        Integer effectiveRefreshTokenValidity = refreshTokenValidity != null
+                ? normalizeRefreshTokenValidity(refreshTokenValidity)
+                : client.getRefreshTokenValidity();
+        Map<String, String> effectiveTokenValidityUnits = tokenValidityUnits != null
+                ? copyStringMap(tokenValidityUnits)
+                : client.getTokenValidityUnits();
+        List<String> effectiveLogoutUrls = logoutURLs != null
+                ? normalizeStringList(logoutURLs)
+                : client.getLogoutURLs();
+
+        validateUserPoolClientConfiguration(
+                effectiveAllowedOAuthFlowsUserPoolClient,
+                effectiveAllowedOAuthFlows,
+                effectiveAllowedOAuthScopes,
+                effectiveCallbackUrls,
+                effectiveDefaultRedirectUri,
+                effectiveAccessTokenValidity,
+                effectiveIdTokenValidity,
+                effectiveRefreshTokenValidity,
+                effectiveLogoutUrls,
+                effectiveTokenValidityUnits
+        );
+
         if (clientName != null) client.setClientName(clientName);
         if (allowedOAuthFlowsUserPoolClient != null) {
             client.setAllowedOAuthFlowsUserPoolClient(allowedOAuthFlowsUserPoolClient);
         }
         if (allowedOAuthFlows != null) {
-            client.setAllowedOAuthFlows(normalizeStringList(allowedOAuthFlows));
+            client.setAllowedOAuthFlows(effectiveAllowedOAuthFlows);
         }
         if (allowedOAuthScopes != null) {
-            client.setAllowedOAuthScopes(normalizeStringList(allowedOAuthScopes));
+            client.setAllowedOAuthScopes(effectiveAllowedOAuthScopes);
         }
         if (analyticsConfiguration != null) {
             client.setAnalyticsConfiguration(copyObjectMap(analyticsConfiguration));
         }
         if (callbackURLs != null) {
-            client.setCallbackURLs(normalizeStringList(callbackURLs));
+            client.setCallbackURLs(effectiveCallbackUrls);
         }
         if (defaultRedirectURI != null) {
-            client.setDefaultRedirectURI(defaultRedirectURI);
+            client.setDefaultRedirectURI(effectiveDefaultRedirectUri);
         }
         if (explicitAuthFlows != null) {
             client.setExplicitAuthFlows(normalizeStringList(explicitAuthFlows));
@@ -449,7 +518,7 @@ public class CognitoService {
             client.setIdTokenValidity(idTokenValidity);
         }
         if (logoutURLs != null) {
-            client.setLogoutURLs(normalizeStringList(logoutURLs));
+            client.setLogoutURLs(effectiveLogoutUrls);
         }
         if (preventUserExistenceErrors != null) {
             client.setPreventUserExistenceErrors(preventUserExistenceErrors);
@@ -458,13 +527,13 @@ public class CognitoService {
             client.setReadAttributes(normalizeStringList(readAttributes));
         }
         if (refreshTokenValidity != null) {
-            client.setRefreshTokenValidity(refreshTokenValidity);
+            client.setRefreshTokenValidity(effectiveRefreshTokenValidity);
         }
         if (supportedIdentityProviders != null) {
             client.setSupportedIdentityProviders(normalizeStringList(supportedIdentityProviders));
         }
         if (tokenValidityUnits != null) {
-            client.setTokenValidityUnits(copyStringMap(tokenValidityUnits));
+            client.setTokenValidityUnits(effectiveTokenValidityUnits);
         }
         if (writeAttributes != null) {
             client.setWriteAttributes(normalizeStringList(writeAttributes));
@@ -1476,6 +1545,89 @@ public class CognitoService {
         return new LinkedHashMap<>(source);
     }
 
+    private void validateUserPoolClientConfiguration(boolean allowedOAuthFlowsUserPoolClient,
+                                                     List<String> allowedOAuthFlows,
+                                                     List<String> allowedOAuthScopes,
+                                                     List<String> callbackURLs,
+                                                     String defaultRedirectURI,
+                                                     Integer accessTokenValidity,
+                                                     Integer idTokenValidity,
+                                                     Integer refreshTokenValidity,
+                                                     List<String> logoutURLs,
+                                                     Map<String, String> tokenValidityUnits) {
+        validateTokenValidityUnits(tokenValidityUnits);
+        validateTokenValidityValue("AccessTokenValidity", accessTokenValidity);
+        validateTokenValidityValue("IdTokenValidity", idTokenValidity);
+        validateRefreshTokenValidityValue(refreshTokenValidity);
+
+        List<String> effectiveFlows = allowedOAuthFlows != null ? allowedOAuthFlows : List.of();
+        List<String> effectiveScopes = allowedOAuthScopes != null ? allowedOAuthScopes : List.of();
+        List<String> effectiveCallbackUrls = callbackURLs != null ? callbackURLs : List.of();
+        List<String> effectiveLogoutUrls = logoutURLs != null ? logoutURLs : List.of();
+
+        if (!allowedOAuthFlowsUserPoolClient) {
+            if (!effectiveFlows.isEmpty() || !effectiveScopes.isEmpty()
+                    || !effectiveCallbackUrls.isEmpty() || !effectiveLogoutUrls.isEmpty()
+                    || defaultRedirectURI != null) {
+                throw new AwsException("InvalidParameterException",
+                        "To use authorization server features, set AllowedOAuthFlowsUserPoolClient to true.",
+                        400);
+            }
+            return;
+        }
+
+        if (defaultRedirectURI != null && !effectiveCallbackUrls.contains(defaultRedirectURI)) {
+            throw new AwsException("InvalidParameterException",
+                    "DefaultRedirectURI must be in the CallbackURLs list.", 400);
+        }
+
+        if ((effectiveFlows.contains("code") || effectiveFlows.contains("implicit"))
+                && effectiveCallbackUrls.isEmpty()) {
+            throw new AwsException("InvalidParameterException",
+                    "CallbackURLs must contain at least one URI when code or implicit OAuth flows are enabled.",
+                    400);
+        }
+    }
+
+    private void validateTokenValidityUnits(Map<String, String> tokenValidityUnits) {
+        if (tokenValidityUnits == null || tokenValidityUnits.isEmpty()) {
+            return;
+        }
+
+        Set<String> supportedKeys = Set.of("AccessToken", "IdToken", "RefreshToken");
+        Set<String> supportedUnits = Set.of("seconds", "minutes", "hours", "days");
+        for (Map.Entry<String, String> entry : tokenValidityUnits.entrySet()) {
+            if (!supportedKeys.contains(entry.getKey())) {
+                throw new AwsException("InvalidParameterException",
+                        "TokenValidityUnits contains an unsupported key: " + entry.getKey() + ".", 400);
+            }
+            String normalizedUnit = normalizeOptionalString(entry.getValue());
+            if (normalizedUnit == null || !supportedUnits.contains(normalizedUnit)) {
+                throw new AwsException("InvalidParameterException",
+                        "TokenValidityUnits contains an unsupported unit value: " + entry.getValue() + ".", 400);
+            }
+        }
+    }
+
+    private void validateTokenValidityValue(String fieldName, Integer value) {
+        if (value != null && value <= 0) {
+            throw new AwsException("InvalidParameterException", fieldName + " must be greater than 0.", 400);
+        }
+    }
+
+    private void validateRefreshTokenValidityValue(Integer value) {
+        if (value != null && value < 0) {
+            throw new AwsException("InvalidParameterException", "RefreshTokenValidity must be greater than or equal to 0.", 400);
+        }
+    }
+
+    private Integer normalizeRefreshTokenValidity(Integer value) {
+        if (value != null && value == 0) {
+            return DEFAULT_REFRESH_TOKEN_VALIDITY_DAYS;
+        }
+        return value;
+    }
+
     private List<ResourceServerScope> normalizeScopes(List<ResourceServerScope> scopes) {
         if (scopes == null || scopes.isEmpty()) {
             return List.of();
@@ -1515,6 +1667,14 @@ public class CognitoService {
             }
         }
         return normalized;
+    }
+
+    private String normalizeOptionalString(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private boolean isBuiltInScope(String scope) {
