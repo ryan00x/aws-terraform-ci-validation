@@ -22,6 +22,7 @@ import io.github.hectorvent.floci.services.stepfunctions.model.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.quarkus.arc.Arc;
@@ -288,11 +289,14 @@ public class AslExecutor {
 
         JsonNode effectiveInput = applyInputPath(stateDef, input);
 
-        JsonNode result;
+        // Pass states transform their input through Parameters (with intrinsics), then a static
+        // Result overrides if present.
+        JsonNode result = effectiveInput;
+        if (stateDef.has("Parameters")) {
+            result = resolveParameters(stateDef.get("Parameters"), effectiveInput, context);
+        }
         if (stateDef.has("Result")) {
             result = stateDef.get("Result");
-        } else {
-            result = effectiveInput;
         }
 
         JsonNode output = mergeResult(stateDef, input, result);
@@ -343,6 +347,10 @@ public class AslExecutor {
             JsonNode output = applyJsonataOutput(stateDef, input, taskResult, context);
             return new StateResult(output, stateDef.path("Next").asText(null));
         } else {
+            // ResultSelector transforms the raw result before ResultPath merges it into the state input.
+            if (stateDef.has("ResultSelector")) {
+                taskResult = resolveParameters(stateDef.get("ResultSelector"), taskResult, context);
+            }
             JsonNode output = mergeResult(stateDef, input, taskResult);
             output = applyOutputPath(stateDef, input, output);
             return new StateResult(output, stateDef.path("Next").asText(null));
@@ -955,7 +963,10 @@ public class AslExecutor {
         }
         if (rule.has("IsPresent")) {
             boolean expectPresent = rule.get("IsPresent").asBoolean();
-            return !value.isMissingNode() == expectPresent;
+            // A field that exists with an explicit null value still counts as present in AWS, so
+            // resolve without collapsing missing into null: only a truly absent path is "not present".
+            boolean present = !resolvePathNode(variable, input).isMissingNode();
+            return present == expectPresent;
         }
         if (rule.has("IsString")) {
             return value.isTextual() == rule.get("IsString").asBoolean();
@@ -1065,7 +1076,11 @@ public class AslExecutor {
             return new StateResult(output, stateDef.path("Next").asText(null));
         }
 
-        JsonNode output = mergeResult(stateDef, input, results);
+        // ResultSelector transforms the raw branch results before ResultPath merges them in.
+        JsonNode selected = stateDef.has("ResultSelector")
+                ? resolveParameters(stateDef.get("ResultSelector"), results, context)
+                : results;
+        JsonNode output = mergeResult(stateDef, input, selected);
         output = applyOutputPath(stateDef, input, output);
         return new StateResult(output, stateDef.path("Next").asText(null));
     }
@@ -1127,7 +1142,11 @@ public class AslExecutor {
             return new StateResult(output, stateDef.path("Next").asText(null));
         }
 
-        JsonNode output = mergeResult(stateDef, input, results);
+        // ResultSelector transforms the raw iteration results before ResultPath merges them in.
+        JsonNode selected = stateDef.has("ResultSelector")
+                ? resolveParameters(stateDef.get("ResultSelector"), results, context)
+                : results;
+        JsonNode output = mergeResult(stateDef, input, selected);
         output = applyOutputPath(stateDef, input, output);
         return new StateResult(output, stateDef.path("Next").asText(null));
     }
@@ -1280,7 +1299,7 @@ public class AslExecutor {
         return resolvePath(path, output);
     }
 
-    private JsonNode resolveParameters(JsonNode parameters, JsonNode input, JsonNode context) throws Exception {
+    JsonNode resolveParameters(JsonNode parameters, JsonNode input, JsonNode context) throws Exception {
         if (parameters.isObject()) {
             ObjectNode resolved = objectMapper.createObjectNode();
             Iterator<Map.Entry<String, JsonNode>> fields = parameters.fields();
@@ -1311,39 +1330,116 @@ public class AslExecutor {
     }
 
     JsonNode resolvePath(String path, JsonNode root) {
+        JsonNode node = resolvePathNode(path, root);
+        // Most callers do not distinguish an absent path from an explicit null; collapse both to null.
+        return node.isMissingNode() ? NullNode.getInstance() : node;
+    }
+
+    /**
+     * Resolves a reference path while preserving the distinction between an explicit null value
+     * (returns a {@link NullNode}) and a missing/absent path (returns a {@link MissingNode}).
+     * {@link #resolvePath} collapses both to null; only callers that care about presence
+     * (e.g. {@code IsPresent}) should use this variant.
+     */
+    JsonNode resolvePathNode(String path, JsonNode root) {
         if (path == null || "$".equals(path)) {
             return root;
         }
         if (path.startsWith("States.")) {
             return evaluateIntrinsic(path, root);
         }
-        if (!path.startsWith("$.")) {
-            return NullNode.getInstance();
+        // Support dotted ($.a.b) and root-bracket ($[*], $[0]) forms; anything else is unsupported.
+        if (!path.startsWith("$.") && !path.startsWith("$[")) {
+            return MissingNode.getInstance();
         }
-        String[] parts = path.substring(2).split("\\.");
-        JsonNode current = root;
-        for (String part : parts) {
-            if (current == null || current.isMissingNode()) {
-                return NullNode.getInstance();
+        return walkPath(splitPathSegments(path), 0, root);
+    }
+
+    /**
+     * Splits a reference path into segments, normalizing bracket notation into dot segments so the
+     * AWS bracket forms reduce to the same walk as the dot forms:
+     * {@code $.Regions[*].RegionName} and {@code $.Regions.*.RegionName} both yield
+     * {@code [Regions, *, RegionName]}, and {@code $[*][*]} yields {@code [*, *]}.
+     *
+     * <p>Limitation: every literal dot is treated as a segment separator, so a field name that
+     * itself contains a dot is mis-split. AWS's bracket-quoted escape hatch ({@code $.a['b.c']})
+     * is not supported; this matches the prior behavior and is rare in ASL reference paths.
+     */
+    private String[] splitPathSegments(String path) {
+        String rest = path.substring(1);                  // drop leading '$'
+        rest = rest.replaceAll("\\[(\\*|\\d+)]", ".$1");  // [*] -> .*, [0] -> .0
+        rest = rest.replaceAll("\\.{2,}", ".");           // collapse ".[0]" -> "..0" -> ".0"
+        if (rest.startsWith(".")) {
+            rest = rest.substring(1);
+        }
+        return rest.isEmpty() ? new String[0] : rest.split("\\.");
+    }
+
+    /**
+     * Walks the remaining path segments from {@code idx}. A {@code *} segment projects the rest of
+     * the path over each element of the current array and collects the results into an array
+     * (e.g. {@code $.Regions[*].RegionName}). When the projected suffix contains a further wildcard,
+     * the nested projections are flattened one level so {@code $[*][*]} flattens an array of arrays.
+     * A purely numeric segment indexes into an array (e.g. {@code $.items[0]}).
+     */
+    private JsonNode walkPath(String[] parts, int idx, JsonNode current) {
+        for (int i = idx; i < parts.length; i++) {
+            if (current == null || current.isMissingNode() || current.isNull()) {
+                return MissingNode.getInstance();
             }
-            // Handle array index notation like field[0]
-            if (part.contains("[")) {
-                int bracketOpen = part.indexOf('[');
-                int bracketClose = part.indexOf(']');
-                String fieldName = part.substring(0, bracketOpen);
-                int index = Integer.parseInt(part.substring(bracketOpen + 1, bracketClose));
-                current = current.path(fieldName).path(index);
+            String part = parts[i];
+            if ("*".equals(part)) {
+                if (!current.isArray()) {
+                    return MissingNode.getInstance();
+                }
+                boolean flattenSub = false;
+                for (int j = i + 1; j < parts.length; j++) {
+                    if ("*".equals(parts[j])) {
+                        flattenSub = true;
+                        break;
+                    }
+                }
+                ArrayNode projected = objectMapper.createArrayNode();
+                for (JsonNode element : current) {
+                    JsonNode value = walkPath(parts, i + 1, element);
+                    // Only absent matches are skipped; an explicit null is a real value and is kept,
+                    // so $[*].field over [{"field":null},{"field":"x"}] yields [null,"x"].
+                    if (value == null || value.isMissingNode()) {
+                        continue;
+                    }
+                    if (flattenSub && value.isArray()) {
+                        value.forEach(projected::add);
+                    } else {
+                        projected.add(value);
+                    }
+                }
+                return projected;
+            }
+            if (current.isArray() && isArrayIndex(part)) {
+                current = current.path(Integer.parseInt(part));
             } else {
                 current = current.path(part);
             }
         }
-        return current.isMissingNode() ? NullNode.getInstance() : current;
+        return current;
+    }
+
+    private static boolean isArrayIndex(String segment) {
+        if (segment.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < segment.length(); i++) {
+            if (!Character.isDigit(segment.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
      * Evaluate a JSONPath-mode intrinsic function (States.*).
      * Supports: States.StringToJson, States.JsonToString, States.Format,
-     *           States.Array, States.ArrayLength, States.MathAdd, States.UUID.
+     *           States.Array, States.ArrayLength, States.ArrayContains, States.MathAdd, States.UUID.
      * Throws FailStateException("States.Runtime") for unrecognized functions.
      */
     private JsonNode evaluateIntrinsic(String expr, JsonNode root) {
@@ -1418,6 +1514,28 @@ public class AslExecutor {
                 JsonNode a = resolveIntrinsicArg(parts.get(0).trim(), root);
                 JsonNode b = resolveIntrinsicArg(parts.get(1).trim(), root);
                 yield objectMapper.getNodeFactory().numberNode(a.asLong() + b.asLong());
+            }
+            case "States.ArrayContains" -> {
+                List<String> parts = splitIntrinsicArgs(argsStr);
+                if (parts.size() != 2) {
+                    throw new FailStateException("States.Runtime",
+                            "States.ArrayContains requires exactly 2 arguments");
+                }
+                JsonNode array = resolveIntrinsicArg(parts.get(0).trim(), root);
+                JsonNode value = resolveIntrinsicArg(parts.get(1).trim(), root);
+                if (!array.isArray()) {
+                    // AWS throws rather than silently returning false, matching States.ArrayLength.
+                    throw new FailStateException("States.Runtime",
+                            "States.ArrayContains: first argument must be an array");
+                }
+                boolean contains = false;
+                for (JsonNode element : array) {
+                    if (element.equals(value)) {
+                        contains = true;
+                        break;
+                    }
+                }
+                yield objectMapper.getNodeFactory().booleanNode(contains);
             }
             case "States.UUID" -> {
                 yield objectMapper.getNodeFactory().textNode(java.util.UUID.randomUUID().toString());
