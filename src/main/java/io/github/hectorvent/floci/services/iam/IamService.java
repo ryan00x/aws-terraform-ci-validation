@@ -453,6 +453,20 @@ public class IamService implements SessionAccountLookup {
                         "Policy " + policyArn + " does not exist.", 404));
     }
 
+    /**
+     * Resolves a policy by ARN without throwing, mirroring {@link #getPolicy} so that
+     * AWS-managed policies (arn:aws:iam::aws:policy/...) are served from the global catalog
+     * rather than the account-partitioned store. Attached-policy read paths must use this:
+     * a managed policy attached to a principal owned by a non-default account is absent from
+     * that account's {@link #policies} partition and would otherwise be silently dropped.
+     */
+    private Optional<IamPolicy> resolvePolicy(String arn) {
+        if (arn != null && arn.startsWith(AwsManagedPolicies.ARN_PREFIX)) {
+            return Optional.ofNullable(awsManagedPolicies.get(arn));
+        }
+        return policies.get(arn);
+    }
+
     private void rejectIfAwsManaged(String policyArn) {
         if (policyArn != null && policyArn.startsWith(AwsManagedPolicies.ARN_PREFIX)) {
             throw new AwsException("AccessDenied",
@@ -629,7 +643,7 @@ public class IamService implements SessionAccountLookup {
 
     public List<IamPolicy> listAttachedUserPolicies(String userName, String pathPrefix) {
         return getUser(userName).getAttachedPolicyArns().stream()
-                .flatMap(arn -> policies.get(arn).stream())
+                .flatMap(arn -> resolvePolicy(arn).stream())
                 .filter(p -> pathPrefix == null || p.getPath().startsWith(pathPrefix))
                 .toList();
     }
@@ -664,7 +678,7 @@ public class IamService implements SessionAccountLookup {
 
     public List<IamPolicy> listAttachedGroupPolicies(String groupName, String pathPrefix) {
         return getGroup(groupName).getAttachedPolicyArns().stream()
-                .flatMap(arn -> policies.get(arn).stream())
+                .flatMap(arn -> resolvePolicy(arn).stream())
                 .filter(p -> pathPrefix == null || p.getPath().startsWith(pathPrefix))
                 .toList();
     }
@@ -699,7 +713,7 @@ public class IamService implements SessionAccountLookup {
 
     public List<IamPolicy> listAttachedRolePolicies(String roleName, String pathPrefix) {
         return getRole(roleName).getAttachedPolicyArns().stream()
-                .flatMap(arn -> policies.get(arn).stream())
+                .flatMap(arn -> resolvePolicy(arn).stream())
                 .filter(p -> pathPrefix == null || p.getPath().startsWith(pathPrefix))
                 .toList();
     }
@@ -1156,7 +1170,7 @@ public class IamService implements SessionAccountLookup {
     private String resolveUserBoundaryDocument(String userName) {
         return users.get(userName)
                 .map(IamUser::getPermissionsBoundaryArn)
-                .flatMap(arn -> policies.get(arn))
+                .flatMap(this::resolvePolicy)
                 .map(IamPolicy::getDefaultDocument)
                 .orElse(null);
     }
@@ -1168,7 +1182,7 @@ public class IamService implements SessionAccountLookup {
         String roleName = roleArn.contains("/") ? roleArn.substring(roleArn.lastIndexOf('/') + 1) : roleArn;
         return roles.get(roleName)
                 .map(IamRole::getPermissionsBoundaryArn)
-                .flatMap(arn -> policies.get(arn))
+                .flatMap(this::resolvePolicy)
                 .map(IamPolicy::getDefaultDocument)
                 .orElse(null);
     }
@@ -1227,7 +1241,7 @@ public class IamService implements SessionAccountLookup {
 
         // User attached managed policies
         for (String arn : user.getAttachedPolicyArns()) {
-            Optional<IamPolicy> p = policies.get(arn);
+            Optional<IamPolicy> p = resolvePolicy(arn);
             if (p.isPresent() && p.get().getDefaultDocument() != null) {
                 docs.add(p.get().getDefaultDocument());
             }
@@ -1240,7 +1254,7 @@ public class IamService implements SessionAccountLookup {
             IamGroup group = groupOpt.get();
             docs.addAll(group.getInlinePolicies().values());
             for (String arn : group.getAttachedPolicyArns()) {
-                Optional<IamPolicy> p = policies.get(arn);
+                Optional<IamPolicy> p = resolvePolicy(arn);
                 if (p.isPresent() && p.get().getDefaultDocument() != null) {
                     docs.add(p.get().getDefaultDocument());
                 }
@@ -1267,7 +1281,7 @@ public class IamService implements SessionAccountLookup {
 
         // Role attached managed policies
         for (String arn : role.getAttachedPolicyArns()) {
-            Optional<IamPolicy> p = policies.get(arn);
+            Optional<IamPolicy> p = resolvePolicy(arn);
             if (p.isPresent() && p.get().getDefaultDocument() != null) {
                 docs.add(p.get().getDefaultDocument());
             }
