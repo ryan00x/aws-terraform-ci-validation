@@ -61,8 +61,14 @@ class Ec2IntegrationTest {
     @Test
     @Order(1)
     void describeDefaultVpc() {
+        // Filter to the default VPC rather than assuming it is item[0] of an unfiltered list:
+        // DescribeVpcs returns every VPC in the store's iteration order, so a VPC left behind by
+        // another test class sharing the in-memory EC2 store could otherwise land at item[0] and
+        // flake this assertion (mirrors the approach in describeDefaultSecurityGroup).
         given()
             .formParam("Action", "DescribeVpcs")
+            .formParam("Filter.1.Name", "is-default")
+            .formParam("Filter.1.Value.1", "true")
             .header("Authorization", AUTH_HEADER)
         .when()
             .post("/")
@@ -77,17 +83,23 @@ class Ec2IntegrationTest {
     @Test
     @Order(2)
     void describeDefaultSubnets() {
+        // Assert that default subnets are present rather than relying on position: filtering to
+        // vpc-default still returns any non-default subnet another test created there (e.g.
+        // ElbV2IntegrationTest), which could otherwise land at item[0] and flake this assertion.
         given()
             .formParam("Action", "DescribeSubnets")
+            .formParam("Filter.1.Name", "vpc-id")
+            .formParam("Filter.1.Value.1", "vpc-default")
             .header("Authorization", AUTH_HEADER)
         .when()
             .post("/")
         .then()
             .statusCode(200)
             .contentType("application/xml")
-            .body("DescribeSubnetsResponse.subnetSet.item.size()", greaterThanOrEqualTo(3))
-            .body("DescribeSubnetsResponse.subnetSet.item[0].defaultForAz", equalTo("true"))
-            .body("DescribeSubnetsResponse.subnetSet.item[0].mapPublicIpOnLaunch", equalTo("true"));
+            .body("DescribeSubnetsResponse.subnetSet.item.findAll { it.defaultForAz == 'true' }.size()",
+                greaterThanOrEqualTo(3))
+            .body("DescribeSubnetsResponse.subnetSet.item.find { it.defaultForAz == 'true' }.mapPublicIpOnLaunch",
+                equalTo("true"));
     }
 
     @Test
