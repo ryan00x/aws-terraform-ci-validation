@@ -247,13 +247,18 @@ class Ec2IntegrationTest {
     void describeInstanceTypes() {
         given()
             .formParam("Action", "DescribeInstanceTypes")
+            .formParam("InstanceType.1", "m6gd.2xlarge")
             .header("Authorization", AUTH_HEADER)
         .when()
             .post("/")
         .then()
             .statusCode(200)
             .contentType("application/xml")
-            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.size()", greaterThan(0));
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.instanceType", equalTo("m6gd.2xlarge"))
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.instanceStorageSupported", equalTo("true"))
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.instanceStorageInfo.totalSizeInGB", equalTo("474"))
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.processorInfo.supportedArchitectures.item",
+                    equalTo("arm64"));
     }
 
     @Test
@@ -277,7 +282,11 @@ class Ec2IntegrationTest {
                     everyItem(equalTo("2")))
             .body("DescribeInstanceTypesResponse.instanceTypeSet.item.memoryInfo.sizeInMiB",
                     everyItem(equalTo("8192")))
-            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.supportedArchitectures.item.item",
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.instanceStorageSupported",
+                    everyItem(equalTo("true")))
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.instanceStorageInfo.totalSizeInGB",
+                    everyItem(equalTo("118")))
+            .body("DescribeInstanceTypesResponse.instanceTypeSet.item.processorInfo.supportedArchitectures.item",
                     everyItem(equalTo("arm64")));
     }
 
@@ -1324,6 +1333,52 @@ class Ec2IntegrationTest {
             .body("RunInstancesResponse.instancesSet.item.instanceType", equalTo("t2.micro"))
             .body("RunInstancesResponse.instancesSet.item.keyName", equalTo("test-key"))
             .extract().path("RunInstancesResponse.instancesSet.item.instanceId");
+    }
+
+    @Test
+    @Order(80)
+    void runInstancesWithArm64ImageDescribesArm64Architecture() {
+        String armInstanceId = given()
+            .formParam("Action", "RunInstances")
+            .formParam("ImageId", "ami-ubuntu2404-cloud-arm64")
+            .formParam("InstanceType", "t4g.medium")
+            .formParam("MinCount", "1")
+            .formParam("MaxCount", "1")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("RunInstancesResponse.instancesSet.item.architecture", equalTo("arm64"))
+            .extract().path("RunInstancesResponse.instancesSet.item.instanceId");
+
+        given()
+            .formParam("Action", "DescribeInstances")
+            .formParam("InstanceId.1", armInstanceId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeInstancesResponse.reservationSet.item.instancesSet.item.architecture",
+                    equalTo("arm64"));
+    }
+
+    @Test
+    @Order(80)
+    void runInstancesRejectsIncompatibleImageAndInstanceTypeArchitecture() {
+        given()
+            .formParam("Action", "RunInstances")
+            .formParam("ImageId", "ami-ubuntu2404-amd64")
+            .formParam("InstanceType", "t4g.medium")
+            .formParam("MinCount", "1")
+            .formParam("MaxCount", "1")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
     }
 
     @Test
