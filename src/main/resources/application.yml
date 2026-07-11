@@ -107,6 +107,8 @@ floci:
         flush-interval-ms: 5000
       batch:
         flush-interval-ms: 5000
+      lightsail:
+        flush-interval-ms: 5000
       codepipeline:
         flush-interval-ms: 5000
       s3vectors:
@@ -411,6 +413,7 @@ floci:
       emit-mode: synchronous
     cloudtrail:
       enabled: true
+    lightsail:
     cloudcontrol:
       enabled: true
     cloudfront:

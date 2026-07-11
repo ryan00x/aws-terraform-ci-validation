@@ -256,6 +256,7 @@ public interface EmulatorConfig {
         CloudFrontStorageConfig cloudfront();
         AppSyncStorageConfig appsync();
         BatchStorageConfig batch();
+        LightsailStorageConfig lightsail();
         CodePipelineStorageConfig codepipeline();
         S3VectorsStorageConfig s3vectors();
         EcsStorageConfig ecs();
@@ -397,6 +398,13 @@ public interface EmulatorConfig {
     }
 
     interface BatchStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
+    interface LightsailStorageConfig {
         Optional<String> mode();
 
         @WithDefault("5000")
@@ -551,6 +559,7 @@ public interface EmulatorConfig {
         CloudFrontServiceConfig cloudfront();
         AppSyncServiceConfig appsync();
         BatchServiceConfig batch();
+        LightsailServiceConfig lightsail();
         UiServiceConfig ui();
         S3VectorsServiceConfig s3vectors();
         IotServiceConfig iot();
@@ -584,6 +593,11 @@ public interface EmulatorConfig {
     }
 
     interface CloudTrailServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface LightsailServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
