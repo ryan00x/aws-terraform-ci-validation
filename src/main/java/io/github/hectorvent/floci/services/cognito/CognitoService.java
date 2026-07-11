@@ -847,11 +847,54 @@ public class CognitoService {
     public void adminUserGlobalSignOut(String userPoolId, String username) {
         // Validate user exists
         CognitoUser user = adminGetUser(userPoolId, username);
-        
+
         // Revoke all tokens for this user
         revokeAllUserTokens(userPoolId, username);
-        
+
         LOG.infov("AdminUserGlobalSignOut: revoked all tokens for user {0} in pool {1}", username, userPoolId);
+    }
+
+    /**
+     * GlobalSignOut — the self-service counterpart to AdminUserGlobalSignOut, authenticated
+     * with the caller's access token instead of admin credentials. Invalidates the access,
+     * ID, and refresh tokens Cognito issued to the user, matching AWS behavior.
+     */
+    public void globalSignOut(String accessToken) {
+        if (accessToken == null || accessToken.isEmpty()) {
+            throw new AwsException("InvalidParameterException",
+                    "1 validation error detected: Value at 'accessToken' failed to satisfy constraint: Member must not be null", 400);
+        }
+
+        String username = extractUsernameFromToken(accessToken);
+        String poolId = extractPoolIdFromToken(accessToken);
+        String jti = extractJtiFromToken(accessToken);
+
+        if (username == null || poolId == null || jti == null) {
+            throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
+        }
+
+        // A token that was already revoked (or issued before an earlier sign-out) cannot
+        // authorize a fresh sign-out.
+        validateTokenNotRevoked(jti, poolId, "access");
+        Long iat = extractIatFromToken(accessToken);
+        validateUserNotGloballySignedOut(username, poolId, "access", iat != null ? iat : 0L);
+
+        // Confirm the pool and user actually exist before mutating the revocation store,
+        // matching the implicit validation AWS performs and the adminUserGlobalSignOut counterpart.
+        try {
+            adminGetUser(poolId, username);
+        } catch (AwsException e) {
+            if ("UserNotFoundException".equals(e.getErrorCode())
+                    || "ResourceNotFoundException".equals(e.getErrorCode())) {
+                throw new AwsException("NotAuthorizedException", "Invalid access token", 400);
+            }
+            throw e;
+        }
+
+        // Revoke all of the user's issued tokens (access, ID, refresh).
+        revokeAllUserTokens(poolId, username);
+
+        LOG.infov("GlobalSignOut: revoked all tokens for user {0} in pool {1}", username, poolId);
     }
 
     public CognitoUser adminGetUser(String userPoolId, String username) {
