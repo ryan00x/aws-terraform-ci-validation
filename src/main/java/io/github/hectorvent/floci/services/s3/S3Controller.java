@@ -46,6 +46,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -1753,7 +1754,13 @@ public class S3Controller {
         String xml = new String(body, StandardCharsets.UTF_8);
         String mode = XmlParser.extractFirst(xml, "Mode", null);
         String dateStr = XmlParser.extractFirst(xml, "RetainUntilDate", null);
-        Instant retainUntil = dateStr != null ? Instant.parse(dateStr) : null;
+        Instant retainUntil;
+        try {
+            retainUntil = dateStr != null ? Instant.parse(dateStr) : null;
+        } catch (DateTimeParseException | IllegalArgumentException e) {
+            throw new AwsException("MalformedXML",
+                    "The XML you provided was not well-formed.", 400);
+        }
         boolean bypass = "true".equalsIgnoreCase(
                 httpHeaders.getHeaderString("x-amz-bypass-governance-retention"));
         s3Service.putObjectRetention(bucket, key, versionId, mode, retainUntil, bypass);
