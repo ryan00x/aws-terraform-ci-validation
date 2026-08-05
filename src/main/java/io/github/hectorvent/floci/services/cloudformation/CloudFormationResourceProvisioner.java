@@ -455,8 +455,8 @@ public class CloudFormationResourceProvisioner {
             case "AWS::S3::Bucket" -> s3Service.deleteBucket(physicalId);
             case "AWS::SNS::Topic" -> snsService.deleteTopic(physicalId, region);
             case "AWS::SNS::Subscription" -> snsService.unsubscribe(physicalId, region);
-            case "AWS::DynamoDB::Table" -> dynamoDbService.deleteTable(physicalId, region);
-            case "AWS::Lambda::Function" -> lambdaService.deleteFunction(region, physicalId);
+            case "AWS::DynamoDB::Table" -> deleteDynamoTableSafe(physicalId, region);
+            case "AWS::Lambda::Function" -> deleteLambdaFunctionSafe(physicalId, region);
             case "AWS::IAM::Role" -> deleteRoleSafe(physicalId);
             // AWS::IAM::Policy is inline: it is removed together with its owning principal (see
             // deleteRoleSafe), or precisely via the StackResource-aware delete path. Nothing to do
@@ -4258,6 +4258,28 @@ public class CloudFormationResourceProvisioner {
                 throw e;
             }
             LOG.debugv("IAM policy already gone, treating as deleted: {0}", policyArn);
+        }
+    }
+
+    private void deleteDynamoTableSafe(String tableName, String region) {
+        try {
+            dynamoDbService.deleteTable(tableName, region);
+        } catch (AwsException e) {
+            if (!"ResourceNotFoundException".equals(e.getErrorCode())) {
+                throw e;
+            }
+            LOG.debugv("DynamoDB table already gone, treating as deleted: {0}", tableName);
+        }
+    }
+
+    private void deleteLambdaFunctionSafe(String functionName, String region) {
+        try {
+            lambdaService.deleteFunction(region, functionName);
+        } catch (AwsException e) {
+            if (!"ResourceNotFoundException".equals(e.getErrorCode())) {
+                throw e;
+            }
+            LOG.debugv("Lambda function already gone, treating as deleted: {0}", functionName);
         }
     }
 
