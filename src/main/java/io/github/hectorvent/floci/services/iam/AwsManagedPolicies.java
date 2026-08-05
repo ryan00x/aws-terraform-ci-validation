@@ -57,13 +57,22 @@ final class AwsManagedPolicies {
         new ManagedPolicyDef("AWSLambdaFullAccess", "/",
                 "Provides full access to Lambda, S3, DynamoDB, CloudWatch Metrics and Logs."),
         new ManagedPolicyDef("AWSCloudFormationReadOnlyAccess", "/",
-                "Provides read only access to Cloud Control and CloudFormation."),
+                "Provides access to AWS CloudFormation via the AWS Management Console."),
         new ManagedPolicyDef("AWSCloudFormationFullAccess", "/",
                 "Provides full access to AWS CloudFormation."),
         new ManagedPolicyDef("AWSXRayDaemonWriteAccess", "/",
                 "Allows write permissions to the AWS X-Ray daemon."),
         new ManagedPolicyDef("AmazonElasticFileSystemClientFullAccess", "/",
                 "Provides root client access to an Amazon EFS file system."),
+        // Attached by the roles `cdk bootstrap` creates, so without it the CDKToolkit stack
+        // rolls back and no CDK app can be deployed.
+        new ManagedPolicyDef("AmazonAthenaFullAccess", "/",
+                "Provide full access to Amazon Athena and scoped access to the dependencies "
+                + "needed to enable querying, writing results, and data management."),
+        new ManagedPolicyDef("AmazonRedshiftFullAccess", "/",
+                "Provides full access to Amazon Redshift via the AWS Management Console."),
+        new ManagedPolicyDef("AmazonS3TablesReadOnlyAccess", "/",
+                "Provides read only access to all S3 table buckets."),
         new ManagedPolicyDef("AWSCloudTrail_FullAccess", "/",
                 "Provides full access to AWS CloudTrail."),
         new ManagedPolicyDef("AWSCloudTrail_ReadOnlyAccess", "/",
