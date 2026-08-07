@@ -44,6 +44,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -766,7 +767,7 @@ public class ApiGatewayExecuteController {
         }
     }
 
-    private Response buildProxyResponse(InvokeResult result) {
+    Response buildProxyResponse(InvokeResult result) {
         if (result.getPayload() == null || result.getPayload().length == 0) {
             return Response.status(result.getFunctionError() != null ? 502 : result.getStatusCode()).build();
         }
@@ -793,9 +794,9 @@ public class ApiGatewayExecuteController {
                 String bodyStr = bodyNode.asText();
                 boolean isBase64 = node.path("isBase64Encoded").asBoolean(false);
                 byte[] bytes = isBase64 ? Base64.getDecoder().decode(bodyStr) : bodyStr.getBytes();
-                String ct = MediaType.APPLICATION_JSON;
-                JsonNode ctNode = node.path("headers").path("Content-Type");
-                if (!ctNode.isMissingNode() && !ctNode.isNull()) ct = ctNode.asText();
+                String ct = findHeaderIgnoreCase(multiHeaders, "Content-Type")
+                        .or(() -> findHeaderIgnoreCase(respHeaders, "Content-Type"))
+                        .orElse(MediaType.APPLICATION_JSON);
                 builder.entity(bytes).type(ct);
             }
             return builder.build();
@@ -803,6 +804,29 @@ public class ApiGatewayExecuteController {
             LOG.warnv("Failed to parse Lambda response: {0}", e.getMessage());
             return Response.status(502).entity(result.getPayload()).type(MediaType.APPLICATION_JSON).build();
         }
+    }
+
+    /**
+     * HTTP header names are case-insensitive on the wire (RFC 7230 §3.2), and Lambda proxy
+     * integrations commonly return lowercased names (e.g. the AWS Lambda Web Adapter emits
+     * "content-type", not "Content-Type"). A plain JsonNode#path lookup is exact-case and
+     * silently misses those, so Content-Type detection needs to scan case-insensitively.
+     * Handles both the "headers" shape (single string value) and the "multiValueHeaders"
+     * shape (array value, first element wins).
+     */
+    private static Optional<String> findHeaderIgnoreCase(JsonNode headersNode, String name) {
+        if (headersNode == null || !headersNode.isObject()) {
+            return Optional.empty();
+        }
+        var it = headersNode.fields();
+        while (it.hasNext()) {
+            var e = it.next();
+            if (e.getKey().equalsIgnoreCase(name)) {
+                JsonNode value = e.getValue().isArray() ? e.getValue().get(0) : e.getValue();
+                return value == null || value.isNull() ? Optional.empty() : Optional.of(value.asText());
+            }
+        }
+        return Optional.empty();
     }
 
     // ──────────────────────────── AWS (non-proxy) ────────────────────────────
