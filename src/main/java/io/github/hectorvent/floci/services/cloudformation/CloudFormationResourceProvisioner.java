@@ -119,8 +119,9 @@ public class CloudFormationResourceProvisioner {
     private static final String INLINE_CLEANUP_ROLE_TARGETS_ATTR = "__FlociInlineCleanupRoleTargets";
     private static final String INLINE_CLEANUP_USER_TARGETS_ATTR = "__FlociInlineCleanupUserTargets";
     private static final String INLINE_CLEANUP_GROUP_TARGETS_ATTR = "__FlociInlineCleanupGroupTargets";
-    private static final String LAMBDA_NAME_MODE_EXPLICIT = "explicit";
-    private static final String LAMBDA_NAME_MODE_GENERATED = "generated";
+    private static final String NAME_MODE_EXPLICIT = "explicit";
+    private static final String NAME_MODE_GENERATED = "generated";
+    private static final String LOG_GROUP_NAME_MODE_ATTR = "FlociLogGroupNameMode";
     private static final String SECRET_TARGET_MANAGED_KEYS_ATTR = "__FlociSecretTargetManagedKeys";
     private static final String SECRET_TARGET_OWNER_ATTR = "__FlociSecretTargetOwner";
     private static final List<String> SECRET_TARGET_CONNECTION_KEYS = List.of(
@@ -707,8 +708,32 @@ public class CloudFormationResourceProvisioner {
 
     private void provisionLogGroup(StackResource r, JsonNode props, CloudFormationTemplateEngine engine,
                                    String region, String accountId, String stackName) {
-        String name = resolveOptional(props, "LogGroupName", engine);
-        if (name == null || name.isBlank()) {
+        String explicitName = resolveOptional(props, "LogGroupName", engine);
+        boolean hasExplicitName = explicitName != null && !explicitName.isBlank();
+        String previousNameMode = r.getAttributes().get(LOG_GROUP_NAME_MODE_ATTR);
+        if (previousNameMode == null && r.getPhysicalId() != null) {
+            // Stacks persisted before FlociLogGroupNameMode existed have no recorded mode, but an
+            // auto-generated name always has the deterministic <stackName>-<logicalId>-<12 hex chars>
+            // shape generatePhysicalName produces, so anything else must have been explicit.
+            previousNameMode = isGeneratedLogGroupName(r.getPhysicalId(), stackName, r.getLogicalId())
+                    ? NAME_MODE_GENERATED
+                    : NAME_MODE_EXPLICIT;
+        }
+        // Going from an explicit name to none is itself a replacement-worthy change on real AWS, not
+        // something to silently keep reconciling under the old explicit name (mirrors the same check
+        // for Lambda's FunctionName above).
+        boolean explicitNameRemoved = r.getPhysicalId() != null && !hasExplicitName
+                && NAME_MODE_EXPLICIT.equals(previousNameMode);
+
+        String name;
+        if (hasExplicitName) {
+            name = explicitName;
+        } else if (r.getPhysicalId() != null && !explicitNameRemoved) {
+            // No explicit name and the prior name was itself auto-generated: keep it across updates
+            // instead of generating a fresh random one each time, so the log group is reconciled in
+            // place rather than replaced on every no-op update.
+            name = r.getPhysicalId();
+        } else {
             name = generatePhysicalName(stackName, r.getLogicalId(), 512, false);
         }
         Integer retentionInDays = null;
@@ -729,11 +754,74 @@ public class CloudFormationResourceProvisioner {
                 }
             }
         }
-        logsService.createLogGroup(name, retentionInDays, tags, region);
+
+        // LogGroupName isn't updatable in place on real AWS (a change replaces the resource), so only
+        // reconcile in place when the name is unchanged and the group is still there; otherwise this is
+        // either a first create or a rename, both of which need a fresh createLogGroup call. On a rename,
+        // create the new group before deleting the old one: if the new name collides with something else
+        // and createLogGroup throws, the update rolls back without touching the old group, since rollback
+        // does not restore a resource this method already deleted.
+        String priorPhysicalId = r.getPhysicalId();
+        if (priorPhysicalId != null && priorPhysicalId.equals(name) && logsService.logGroupExists(name, region)) {
+            reconcileLogGroup(name, retentionInDays, tags, region);
+        } else {
+            logsService.createLogGroup(name, retentionInDays, tags, region);
+            if (priorPhysicalId != null && !priorPhysicalId.equals(name)
+                    && logsService.logGroupExists(priorPhysicalId, region)) {
+                logsService.deleteLogGroup(priorPhysicalId, region);
+            }
+        }
+
         // Ref returns the log group name; GetAtt Arn is arn:aws:logs:<region>:<account>:log-group:<name>:*
         r.setPhysicalId(name);
         r.getAttributes().put("Arn",
                 AwsArnUtils.Arn.of("logs", region, accountId, "log-group:" + name + ":*").toString());
+        r.getAttributes().put(LOG_GROUP_NAME_MODE_ATTR,
+                hasExplicitName ? NAME_MODE_EXPLICIT : NAME_MODE_GENERATED);
+    }
+
+    /**
+     * Whether {@code physicalId} matches the exact shape {@link #generatePhysicalName} produces for
+     * this stack/logical id: {@code <stackName>-<logicalId>-} followed by exactly 12 lowercase hex
+     * characters. Doesn't account for the (practically unreachable at a 512-character limit)
+     * truncation path in {@link #generatePhysicalName}, so a truncated legacy name is conservatively
+     * treated as explicit rather than misdetected as generated.
+     */
+    private boolean isGeneratedLogGroupName(String physicalId, String stackName, String logicalId) {
+        String prefix = stackName + "-" + logicalId + "-";
+        if (!physicalId.startsWith(prefix)) {
+            return false;
+        }
+        String suffix = physicalId.substring(prefix.length());
+        if (suffix.length() != 12) {
+            return false;
+        }
+        for (int i = 0; i < suffix.length(); i++) {
+            char c = suffix.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!hex) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void reconcileLogGroup(String name, Integer retentionInDays, Map<String, String> tags, String region) {
+        if (retentionInDays != null) {
+            logsService.putRetentionPolicy(name, retentionInDays, region);
+        } else {
+            logsService.deleteRetentionPolicy(name, region);
+        }
+        Map<String, String> existingTags = logsService.listTagsLogGroup(name, region);
+        List<String> tagsToRemove = existingTags.keySet().stream()
+                .filter(key -> !tags.containsKey(key))
+                .toList();
+        if (!tagsToRemove.isEmpty()) {
+            logsService.untagLogGroup(name, tagsToRemove, region);
+        }
+        if (!tags.isEmpty()) {
+            logsService.tagLogGroup(name, tags, region);
+        }
     }
 
     // ── Kinesis ─────────────────────────────────────────────────────────────────
@@ -1418,7 +1506,7 @@ public class CloudFormationResourceProvisioner {
         r.getAttributes().put("Arn", func.getFunctionArn());
         r.getAttributes().put(LAMBDA_CODE_IDENTITY_ATTR, desired.code().identity());
         r.getAttributes().put(LAMBDA_NAME_MODE_ATTR,
-                desired.explicitFunctionName() ? LAMBDA_NAME_MODE_EXPLICIT : LAMBDA_NAME_MODE_GENERATED);
+                desired.explicitFunctionName() ? NAME_MODE_EXPLICIT : NAME_MODE_GENERATED);
         r.getAttributes().put(LAMBDA_PACKAGE_TYPE_ATTR, desired.packageType());
     }
 
@@ -1436,7 +1524,7 @@ public class CloudFormationResourceProvisioner {
                 && !Objects.equals(oldPackageType, packageType);
         boolean explicitRemoved = r.getPhysicalId() != null
                 && !hasExplicitName
-                && LAMBDA_NAME_MODE_EXPLICIT.equals(previousNameMode);
+                && NAME_MODE_EXPLICIT.equals(previousNameMode);
 
         String functionName;
         if (hasExplicitName) {
