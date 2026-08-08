@@ -24,6 +24,7 @@ import io.github.hectorvent.floci.services.ses.model.EventDestination;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.MessageHeader;
 import io.github.hectorvent.floci.services.ses.model.MessageTag;
+import io.github.hectorvent.floci.services.ses.model.ReceiptRuleSet;
 import io.github.hectorvent.floci.services.ses.model.Topic;
 import io.github.hectorvent.floci.services.ses.model.TopicPreference;
 import io.github.hectorvent.floci.services.ses.model.TrackingOptions;
@@ -90,6 +91,7 @@ public class SesService {
     // Identity (sending authorization) policies: key policy::<region>::<identity>::<policyName>,
     // value the (normalized) policy JSON. One store shared by the v1 and v2 policy APIs.
     private final StorageBackend<String, String> policyStore;
+    private final StorageBackend<String, ReceiptRuleSet> receiptRuleSetStore;
     // Guards the one-list-per-account check-then-create so concurrent creates can't both pass.
     private final Object contactListCreateLock = new Object();
     // Serializes contact create/update against contact-list deletion so a concurrent delete
@@ -98,6 +100,9 @@ public class SesService {
     // Serializes the per-identity policy count check-then-put so concurrent creates can't both pass.
     private final Object policyMutationLock = new Object();
     static final int MAX_POLICIES_PER_IDENTITY = 20;
+    // Serializes receipt-rule-set create (check-then-put) and set-active (clear-then-set) so the
+    // one-active-per-region invariant and duplicate-name rejection hold under concurrency.
+    private final Object receiptRuleSetLock = new Object();
     private final SmtpRelay smtpRelay;
     private final ObjectMapper objectMapper;
     private final SesEventPublisher eventPublisher;
@@ -132,6 +137,8 @@ public class SesService {
                 new TypeReference<Map<String, Contact>>() {});
         this.policyStore = storageFactory.create("ses", "ses-identity-policies.json",
                 new TypeReference<Map<String, String>>() {});
+        this.receiptRuleSetStore = storageFactory.create("ses", "ses-receipt-rule-sets.json",
+                new TypeReference<Map<String, ReceiptRuleSet>>() {});
         this.smtpRelay = smtpRelay;
         this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
@@ -151,12 +158,13 @@ public class SesService {
                StorageBackend<String, ContactList> contactListStore,
                StorageBackend<String, Contact> contactStore,
                StorageBackend<String, String> policyStore,
+               StorageBackend<String, ReceiptRuleSet> receiptRuleSetStore,
                SmtpRelay smtpRelay,
                ObjectMapper objectMapper,
                Clock clock) {
         this(identityStore, emailStore, accountSettingsStore, templateStore, configSetStore, suppressionStore,
-                accountSuppressionStore, dedicatedIpPoolStore, contactListStore, contactStore, policyStore, smtpRelay,
-                objectMapper, null, clock);
+                accountSuppressionStore, dedicatedIpPoolStore, contactListStore, contactStore, policyStore,
+                receiptRuleSetStore, smtpRelay, objectMapper, null, clock);
     }
 
     SesService(StorageBackend<String, Identity> identityStore,
@@ -170,6 +178,7 @@ public class SesService {
                StorageBackend<String, ContactList> contactListStore,
                StorageBackend<String, Contact> contactStore,
                StorageBackend<String, String> policyStore,
+               StorageBackend<String, ReceiptRuleSet> receiptRuleSetStore,
                SmtpRelay smtpRelay,
                ObjectMapper objectMapper,
                Route53Service route53Service,
@@ -185,6 +194,7 @@ public class SesService {
         this.contactListStore = contactListStore;
         this.contactStore = contactStore;
         this.policyStore = policyStore;
+        this.receiptRuleSetStore = receiptRuleSetStore;
         this.smtpRelay = smtpRelay;
         this.objectMapper = objectMapper;
         this.eventPublisher = null;
@@ -1281,6 +1291,135 @@ public class SesService {
     private static String configSetKey(String region, String name) {
         validateConfigurationSetName(name);
         return "configSet::" + region + "::" + name;
+    }
+
+    // ──────────────────────── Receipt rule sets (inbound) ────────────────────────
+    //
+    // Floci has no inbound-mail endpoint, so receipt rule sets are stored inertly: a set never holds
+    // any rules and routes no mail. They exist only so the management API round-trips (enough to
+    // unblock tools such as Terraform that declare a rule set during bootstrap).
+
+    public ReceiptRuleSet createReceiptRuleSet(String name, String region) {
+        requireRuleSetName(name);
+        String key = receiptRuleSetKey(region, name);
+        ReceiptRuleSet ruleSet = new ReceiptRuleSet(name, Instant.now(clock));
+        synchronized (receiptRuleSetLock) {
+            if (receiptRuleSetStore.get(key).isPresent()) {
+                throw new AwsException("AlreadyExists", "Rule set already exists: " + name, 400);
+            }
+            receiptRuleSetStore.put(key, ruleSet);
+        }
+        LOG.infov("Created SES receipt rule set: {0} in region {1}", name, region);
+        return ruleSet;
+    }
+
+    public ReceiptRuleSet describeReceiptRuleSet(String name, String region) {
+        requireRuleSetName(name);
+        return receiptRuleSetStore.get(receiptRuleSetKey(region, name))
+                .orElseThrow(() -> ruleSetDoesNotExist(name));
+    }
+
+    public List<ReceiptRuleSet> listReceiptRuleSets(String region) {
+        String prefix = "receiptRuleSet::" + region + "::";
+        List<ReceiptRuleSet> all = new ArrayList<>(receiptRuleSetStore.scan(k -> k.startsWith(prefix)));
+        all.sort(Comparator.comparing(ReceiptRuleSet::getCreatedTimestamp,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(ReceiptRuleSet::getName, Comparator.nullsLast(Comparator.naturalOrder())));
+        return all;
+    }
+
+    public void deleteReceiptRuleSet(String name, String region) {
+        requireRuleSetName(name);
+        // Hold the lock so the active-check-then-delete is atomic and a concurrent set-active/clear
+        // (which scans and re-puts active sets) can't resurrect the rule set we just deleted.
+        synchronized (receiptRuleSetLock) {
+            ReceiptRuleSet existing = receiptRuleSetStore.get(receiptRuleSetKey(region, name)).orElse(null);
+            if (existing != null && existing.isActive()) {
+                // AWS rejects deleting the active rule set (verified: CannotDelete / 400).
+                throw new AwsException("CannotDelete", "Cannot delete active rule set: " + name, 400);
+            }
+            // AWS is idempotent otherwise: deleting a non-existent rule set succeeds without error.
+            receiptRuleSetStore.delete(receiptRuleSetKey(region, name));
+        }
+        LOG.infov("Deleted SES receipt rule set: {0} in region {1}", name, region);
+    }
+
+    public void setActiveReceiptRuleSet(String name, String region) {
+        // No RuleSetName clears the account's active rule set (matches AWS).
+        boolean clearOnly = name == null || name.isBlank();
+        if (!clearOnly) {
+            requireRuleSetName(name);
+        }
+        synchronized (receiptRuleSetLock) {
+            if (!clearOnly) {
+                ReceiptRuleSet target = receiptRuleSetStore.get(receiptRuleSetKey(region, name))
+                        .orElseThrow(() -> ruleSetDoesNotExist(name));
+                clearActiveReceiptRuleSet(region);
+                target.setActive(true);
+                receiptRuleSetStore.put(receiptRuleSetKey(region, name), target);
+            } else {
+                clearActiveReceiptRuleSet(region);
+            }
+        }
+        if (clearOnly) {
+            LOG.infov("Cleared active SES receipt rule set in region {0}", region);
+        } else {
+            LOG.infov("Set active SES receipt rule set: {0} in region {1}", name, region);
+        }
+    }
+
+    public ReceiptRuleSet describeActiveReceiptRuleSet(String region) {
+        String prefix = "receiptRuleSet::" + region + "::";
+        // Read under the lock so a concurrent set-active replacement (clear-then-set) can't expose its
+        // intermediate no-active state — the reader sees either the old or the new active set.
+        synchronized (receiptRuleSetLock) {
+            return receiptRuleSetStore.scan(k -> k.startsWith(prefix)).stream()
+                    .filter(ReceiptRuleSet::isActive)
+                    .findFirst()
+                    .orElse(null);
+        }
+    }
+
+    private void clearActiveReceiptRuleSet(String region) {
+        String prefix = "receiptRuleSet::" + region + "::";
+        for (ReceiptRuleSet rs : receiptRuleSetStore.scan(k -> k.startsWith(prefix))) {
+            if (rs.isActive()) {
+                rs.setActive(false);
+                receiptRuleSetStore.put(receiptRuleSetKey(region, rs.getName()), rs);
+            }
+        }
+    }
+
+    // These RuleSetName constraints are not in the botocore model: service-2.json (SES 2010-12-01)
+    // declares ReceiptRuleSetName as a bare {"type": "string"} with no pattern or length. They were
+    // established by probing real SES in us-west-2 via boto3 (2026-08): a character outside
+    // ^[a-zA-Z0-9_.-]+$ is a Smithy ValidationError, and a name that is >64 chars or does not
+    // start/end with an alphanumeric is a service-level "Not a valid ruleSetName" InvalidParameterValue.
+    // Re-verify against live SES (not the model, which can't confirm it) if these ever need to change.
+    private static final Pattern RULE_SET_NAME_CHARS = Pattern.compile("^[a-zA-Z0-9_.-]+$");
+
+    private static void requireRuleSetName(String name) {
+        if (name == null || name.isBlank()) {
+            throw new AwsException("InvalidParameterValue", "RuleSetName is required.", 400);
+        }
+        if (!RULE_SET_NAME_CHARS.matcher(name).matches()) {
+            throw new AwsException("ValidationError",
+                    "1 validation error detected: Value at 'ruleSetName' failed to satisfy constraint: "
+                            + "Member must satisfy regular expression pattern: ^[a-zA-Z0-9_.-]+$", 400);
+        }
+        if (name.length() > 64
+                || !Character.isLetterOrDigit(name.charAt(0))
+                || !Character.isLetterOrDigit(name.charAt(name.length() - 1))) {
+            throw new AwsException("InvalidParameterValue", "Not a valid ruleSetName: " + name, 400);
+        }
+    }
+
+    private static AwsException ruleSetDoesNotExist(String name) {
+        return new AwsException("RuleSetDoesNotExist", "Rule set does not exist: " + name, 400);
+    }
+
+    private static String receiptRuleSetKey(String region, String name) {
+        return "receiptRuleSet::" + region + "::" + name;
     }
 
     // ──────────────────────── Dedicated IP Pools ────────────────────────
