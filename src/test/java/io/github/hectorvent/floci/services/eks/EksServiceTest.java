@@ -3,6 +3,7 @@ package io.github.hectorvent.floci.services.eks;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -12,7 +13,10 @@ import io.github.hectorvent.floci.services.ec2.Ec2ImageCatalog;
 import io.github.hectorvent.floci.services.ec2.Ec2InstanceTypeCatalog;
 import io.github.hectorvent.floci.services.ec2.Ec2Service;
 import io.github.hectorvent.floci.services.ec2.portforward.Ec2PortForwardManager;
+import io.github.hectorvent.floci.services.eks.model.ClusterIdentity;
+import io.github.hectorvent.floci.services.eks.model.ClusterOidcKey;
 import io.github.hectorvent.floci.services.eks.model.ClusterStatus;
+import io.github.hectorvent.floci.services.eks.model.OidcIdentity;
 import io.github.hectorvent.floci.services.eks.model.CreateClusterRequest;
 import io.github.hectorvent.floci.services.eks.model.CreateFargateProfileRequest;
 import io.github.hectorvent.floci.services.eks.model.CreateNodeGroupRequest;
@@ -24,6 +28,7 @@ import io.github.hectorvent.floci.services.eks.model.NodegroupScalingConfig;
 import io.github.hectorvent.floci.services.eks.model.NodegroupStatus;
 import io.github.hectorvent.floci.services.eks.model.ResourcesVpcConfig;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -56,7 +61,8 @@ class EksServiceTest {
         EksClusterManager clusterManager = null;
         Ec2Service ec2Service = null;
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
-        eksService = new EksService(storageFactory, config, regionResolver, clusterManager, ec2Service);
+        eksService = new EksService(storageFactory, config, regionResolver, clusterManager, ec2Service,
+                new EksOidcService(storageFactory, new ObjectMapper()));
     }
 
     private EmulatorConfig testConfig() {
@@ -182,6 +188,113 @@ class EksServiceTest {
     }
 
     @Test
+    void createClusterAssignsOidcIssuerAndKey() {
+        CreateClusterRequest req = new CreateClusterRequest();
+        req.setName("oidc-cluster");
+        req.setRoleArn("arn:aws:iam::000000000000:role/eks-role");
+
+        Cluster cluster = eksService.createCluster(req);
+
+        assertNotNull(cluster.getIdentity());
+        assertNotNull(cluster.getIdentity().getOidc());
+        assertTrue(cluster.getIdentity().getOidc().getIssuer()
+                .matches("https://oidc\\.eks\\.us-east-1\\.amazonaws\\.com/id/[A-F0-9]{32}"));
+    }
+
+    @Test
+    void initBackfillsOidcIdentityForClustersPersistedBeforeIrsaSupport() {
+        // A cluster restored from storage without an identity — what an upgrade looks like — must
+        // gain an issuer and key on startup, or minting and the JWKS routes stay broken for it.
+        StorageBackend<String, Cluster> clusterStore = new InMemoryStorage<>();
+        StorageBackend<String, ClusterOidcKey> keyStore = new InMemoryStorage<>();
+
+        Cluster legacy = new Cluster();
+        legacy.setName("legacy-cluster");
+        legacy.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.put("legacy-cluster", legacy);
+        assertNull(legacy.getIdentity());
+
+        EksOidcService oidcService = new EksOidcService(
+                fixedStorageFactory(keyStore), new ObjectMapper());
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(),
+                new RegionResolver("us-east-1", "000000000000"), null, null, oidcService);
+        restarted.init();
+
+        Cluster migrated = restarted.describeCluster("legacy-cluster");
+        assertNotNull(migrated.getIdentity());
+        String issuer = migrated.getIdentity().getOidc().getIssuer();
+        assertTrue(issuer.matches("https://oidc\\.eks\\.us-east-1\\.amazonaws\\.com/id/[A-F0-9]{32}"));
+        assertTrue(oidcService.findVerificationKey(issuer).isPresent());
+    }
+
+    @Test
+    void initLeavesAnExistingOidcIssuerUnchanged() {
+        StorageBackend<String, Cluster> clusterStore = new InMemoryStorage<>();
+        StorageBackend<String, ClusterOidcKey> keyStore = new InMemoryStorage<>();
+
+        String issuer = "https://oidc.eks.us-east-1.amazonaws.com/id/ABCDEF0123456789ABCDEF0123456789";
+        Cluster existing = new Cluster();
+        existing.setName("existing-cluster");
+        existing.setIdentity(new ClusterIdentity(new OidcIdentity(issuer)));
+        clusterStore.put("existing-cluster", existing);
+
+        EksOidcService oidcService = new EksOidcService(
+                fixedStorageFactory(keyStore), new ObjectMapper());
+        EksService restarted = new EksService(fixedStorageFactory(clusterStore), testConfig(),
+                new RegionResolver("us-east-1", "000000000000"), null, null, oidcService);
+        restarted.init();
+
+        // The issuer a trust policy was written against must survive a restart, and its key must
+        // be present so previously minted tokens still verify.
+        assertEquals(issuer,
+                restarted.describeCluster("existing-cluster").getIdentity().getOidc().getIssuer());
+        assertTrue(oidcService.findVerificationKey(issuer).isPresent());
+    }
+
+    @Test
+    void initBackfillsUnderTheOwningAccountNotTheDefault() {
+        // Startup has no request context, so the account-scoped put() resolves to the default
+        // account. A cluster owned by another account must still be migrated in place, or the owner
+        // keeps an issuer-less record while a duplicate appears under the default account.
+        String otherAccount = "999999999999";
+        StorageBackend<String, Cluster> rawClusters = new InMemoryStorage<>();
+        StorageBackend<String, ClusterOidcKey> rawKeys = new InMemoryStorage<>();
+        var clusterStore = new AccountAwareStorageBackend<>(rawClusters, null, "000000000000");
+        var keyStore = new AccountAwareStorageBackend<>(rawKeys, null, "000000000000");
+
+        Cluster legacy = new Cluster();
+        legacy.setName("legacy-cluster");
+        legacy.setAccountId(otherAccount);
+        legacy.setStatus(ClusterStatus.ACTIVE);
+        clusterStore.putForAccount(otherAccount, "legacy-cluster", legacy);
+
+        EksOidcService oidcService = new EksOidcService(
+                fixedStorageFactory(keyStore), new ObjectMapper());
+        new EksService(fixedStorageFactory(clusterStore), testConfig(),
+                new RegionResolver("us-east-1", "000000000000"), null, null, oidcService).init();
+
+        Cluster migrated = clusterStore.getForAccount(otherAccount, "legacy-cluster").orElseThrow();
+        String issuer = migrated.getIdentity().getOidc().getIssuer();
+        assertNotNull(issuer);
+        // No duplicate stranded under the default account.
+        assertTrue(clusterStore.getForAccount("000000000000", "legacy-cluster").isEmpty());
+        // The signing key is stored under the owner too, and is still resolvable by issuer.
+        assertTrue(keyStore.getForAccount(otherAccount, "legacy-cluster").isPresent());
+        assertTrue(oidcService.findVerificationKey(issuer).isPresent());
+    }
+
+    @SuppressWarnings("unchecked")
+    private StorageFactory fixedStorageFactory(StorageBackend<String, ?> backend) {
+        return new StorageFactory(null, null) {
+            @Override
+            public <V> StorageBackend<String, V> create(String serviceName, String fileName,
+                    TypeReference<Map<String, V>> typeReference) {
+                return (StorageBackend<String, V>) backend;
+            }
+        };
+    }
+
+    @Test
     void createClusterDuplicateFails() {
         CreateClusterRequest req = new CreateClusterRequest();
         req.setName("dup-cluster");
@@ -202,7 +315,8 @@ class EksServiceTest {
             }
         };
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
-        EksService service = new EksService(storageFactory, testConfig(), regionResolver, null, realEc2Service());
+        EksService service = new EksService(storageFactory, testConfig(), regionResolver, null, realEc2Service(),
+                new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
         vpcConfig.setSubnetIds(List.of("subnet-1", "subnet-2"));
@@ -228,7 +342,8 @@ class EksServiceTest {
             }
         };
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
-        EksService service = new EksService(storageFactory, testConfig(), regionResolver, null, realEc2Service());
+        EksService service = new EksService(storageFactory, testConfig(), regionResolver, null, realEc2Service(),
+                new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
         vpcConfig.setSubnetIds(List.of("subnet-default-a", "subnet-default-b"));
@@ -261,7 +376,7 @@ class EksServiceTest {
         };
         RegionResolver regionResolver = new RegionResolver("us-east-1", "000000000000");
         EksService service = new EksService(storageFactory, testConfig(), regionResolver, null,
-                realEc2Service());
+                realEc2Service(), new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
         vpcConfig.setSubnetIds(List.of("subnet-default-a", "subnet-default-b"));
@@ -290,7 +405,7 @@ class EksServiceTest {
         };
         RegionResolver regionResolver = new RegionResolver("eu-west-2", "000000000000");
         EksService service = new EksService(storageFactory, testConfig(), regionResolver, null,
-                realEc2Service());
+                realEc2Service(), new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
         vpcConfig.setSubnetIds(List.of("subnet-default-a"));
@@ -336,7 +451,7 @@ class EksServiceTest {
         // The request is for eu-west-2, where that subnet does not exist.
         RegionResolver regionResolver = new RegionResolver("eu-west-2", "000000000000");
         EksService service = new EksService(storageFactory, testConfig(), regionResolver, null,
-                ec2Service);
+                ec2Service, new EksOidcService(storageFactory, new ObjectMapper()));
 
         ResourcesVpcConfig vpcConfig = new ResourcesVpcConfig();
         vpcConfig.setSubnetIds(List.of(usEastOnlySubnet));
