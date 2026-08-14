@@ -562,6 +562,23 @@ public class Ec2Service implements ContainerTeardown {
     // Managed prefix lists
     // =========================================================================
 
+    /**
+     * Name prefixes AWS reserves for its own gateway-endpoint lists. The trailing dot is part of
+     * each: {@code com.amazonaws-probe} is accepted on AWS, so matching without it over-rejects.
+     */
+    private static final List<String> RESERVED_PREFIX_LIST_NAME_PREFIXES =
+            List.of("com.amazonaws.", "com.amazon.", "com.aws.");
+
+    /** AWS applies the reserved-name rule to a rename as well as a create. */
+    private void requireUnreservedPrefixListName(String prefixListName) {
+        for (String reserved : RESERVED_PREFIX_LIST_NAME_PREFIXES) {
+            if (prefixListName.startsWith(reserved)) {
+                throw new AwsException("InvalidParameterValue",
+                        "The prefix list name cannot begin with (com.amazonaws., com.amazon., com.aws.).", 400);
+            }
+        }
+    }
+
     private List<ManagedPrefixList> awsManagedPrefixLists(String region) {
         return List.of(
                 awsManagedPrefixList(region, "pl-63a5400a", "com.amazonaws." + region + ".s3",
@@ -595,6 +612,7 @@ public class Ec2Service implements ContainerTeardown {
         if (prefixListName == null || prefixListName.isBlank()) {
             throw new AwsException("MissingParameter", "The request must contain the parameter PrefixListName.", 400);
         }
+        requireUnreservedPrefixListName(prefixListName);
         if (!"IPv4".equals(addressFamily) && !"IPv6".equals(addressFamily)) {
             throw new AwsException("InvalidParameterValue",
                     "Invalid value '" + addressFamily + "' for addressFamily. Valid values are IPv4 and IPv6.", 400);
@@ -705,6 +723,7 @@ public class Ec2Service implements ContainerTeardown {
                 list.setMaxEntries(maxEntries);
             }
             if (prefixListName != null && !prefixListName.isBlank()) {
+                requireUnreservedPrefixListName(prefixListName);
                 list.setPrefixListName(prefixListName);
             }
 
