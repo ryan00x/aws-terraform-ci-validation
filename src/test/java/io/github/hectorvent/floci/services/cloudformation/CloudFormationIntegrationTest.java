@@ -33,6 +33,7 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class CloudFormationIntegrationTest {
@@ -9309,6 +9310,107 @@ class CloudFormationIntegrationTest {
             .body("Policy", containsString("StmtB"))
             .body("Policy", containsString("111111111111"))
             .body("Policy", containsString("222222222222"));
+    }
+
+    @Test
+    void createStack_fifoQueueKeepsDeduplicationScopeThroughputLimitAndRedrivePolicy() {
+        // #1907: the stack reached CREATE_COMPLETE but DeduplicationScope, FifoThroughputLimit
+        // and RedrivePolicy were silently dropped on the CloudFormation-to-SQS path.
+        String stackName = "cfn-1907-fifo-attrs-stack";
+        String template = """
+            {
+              "Resources": {
+                "Dlq": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "FifoQueue": true,
+                    "ContentBasedDeduplication": true
+                  }
+                },
+                "MainQueue": {
+                  "Type": "AWS::SQS::Queue",
+                  "Properties": {
+                    "QueueName": "cfn-1907-main.fifo",
+                    "FifoQueue": true,
+                    "ContentBasedDeduplication": false,
+                    "DeduplicationScope": "messageGroup",
+                    "FifoThroughputLimit": "perMessageGroupId",
+                    "VisibilityTimeout": 30,
+                    "RedrivePolicy": {
+                      "deadLetterTargetArn": {"Fn::GetAtt": ["Dlq", "Arn"]},
+                      "maxReceiveCount": 5
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", stackName)
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStacks")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<StackStatus>CREATE_COMPLETE</StackStatus>"));
+
+        // The DLQ had no QueueName: like real CloudFormation, the generated physical name of a
+        // FIFO queue must end in .fifo (SqsService rejects FifoQueue=true otherwise).
+        String resourcesXml = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "DescribeStackResources")
+            .formParam("StackName", stackName)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().asString();
+        String dlqUrl = physicalIdByLogicalId(resourcesXml, "Dlq");
+        String dlqName = dlqUrl.substring(dlqUrl.lastIndexOf('/') + 1);
+        assertTrue(dlqName.endsWith(".fifo"),
+                "generated DLQ physical name should end with .fifo but was: " + dlqName);
+
+        // Every FIFO attribute and the redrive policy (with the resolved DLQ ARN) survives.
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueAttributes")
+            .formParam("QueueUrl", "http://localhost:4566/000000000000/cfn-1907-main.fifo")
+            .formParam("AttributeName.1", "All")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("DeduplicationScope"))
+            .body(containsString("messageGroup"))
+            .body(containsString("FifoThroughputLimit"))
+            .body(containsString("perMessageGroupId"))
+            .body(containsString("RedrivePolicy"))
+            .body(containsString("maxReceiveCount"))
+            .body(containsString("arn:aws:sqs:us-east-1:000000000000:" + dlqName));
+
+        // The generated-name DLQ is itself a FIFO queue.
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "GetQueueAttributes")
+            .formParam("QueueUrl", dlqUrl)
+            .formParam("AttributeName.1", "All")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("FifoQueue"));
     }
 
 }
