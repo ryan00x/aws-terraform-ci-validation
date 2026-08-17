@@ -72,6 +72,7 @@ public class LambdaService {
     private final KinesisEventSourcePoller kinesisPoller;
     private final DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller;
     private final StorageFactory storageFactory;
+    private final LambdaLayerService layerService;
     private Map<String, Integer> versionCounters = new ConcurrentHashMap<>();
     private Map<String, FunctionEventInvokeConfig> eventInvokeConfigs = new ConcurrentHashMap<>();
     /**
@@ -139,6 +140,7 @@ public class LambdaService {
         this.kinesisPoller = null;
         this.dynamodbStreamsPoller = null;
         this.storageFactory = storageFactory;
+        this.layerService = null;
     }
 
     @Inject
@@ -157,7 +159,8 @@ public class LambdaService {
                           SqsEventSourcePoller poller,
                           KinesisEventSourcePoller kinesisPoller,
                           DynamoDbStreamsEventSourcePoller dynamodbStreamsPoller,
-                          StorageFactory storageFactory) {
+                          StorageFactory storageFactory,
+                          LambdaLayerService layerService) {
         this.functionStore = functionStore;
         this.executorService = executorService;
         this.concurrencyLimiter = concurrencyLimiter;
@@ -174,6 +177,23 @@ public class LambdaService {
         this.kinesisPoller = kinesisPoller;
         this.dynamodbStreamsPoller = dynamodbStreamsPoller;
         this.storageFactory = storageFactory;
+        this.layerService = layerService;
+    }
+
+    // Real AWS validates a function's Layers eagerly at CreateFunction/UpdateFunctionConfiguration
+    // time with InvalidParameterValueException, not lazily at invoke time - resolveLayerByArn's
+    // caller in ContainerLauncher only logs a warning and silently launches without the layer's
+    // content mounted, which is correct AWS-parity behavior for a layer deleted *after* being
+    // attached (AWS doesn't re-validate on every invoke either), but was previously the only
+    // signal at all for a bad ARN, even a typo caught at attach time on real AWS.
+    private void validateLayersResolvable(List<String> layerArns) {
+        if (layerArns == null || layerService == null) return;
+        for (String arn : layerArns) {
+            if (layerService.resolveLayerByArn(arn) == null) {
+                throw new AwsException("InvalidParameterValueException",
+                        "Layer version " + arn + " does not exist.", 400);
+            }
+        }
     }
 
     /** Package-private accessor for tests that want to assert limiter state directly. */
@@ -321,6 +341,7 @@ public class LambdaService {
         List<String> layers = request.get("Layers") instanceof List
                 ? (List<String>) request.get("Layers") : null;
         if (layers != null) {
+            validateLayersResolvable(layers);
             fn.setLayers(new ArrayList<>(layers));
         }
 
@@ -463,6 +484,18 @@ public class LambdaService {
     public LambdaFunction updateFunctionConfiguration(String region, String functionName, Map<String, Object> request) {
         LambdaFunction fn = getFunction(region, functionName);
 
+        // Validated before any field mutation below, not inline where Layers is applied further
+        // down - fn is the live object backing this store entry (InMemoryStorage#get returns the
+        // same reference, not a copy), so validating this late would leave every
+        // already-applied field (Description, Timeout, ...) live on a rejected update, since
+        // nothing here is transactional and there's a single save() at the very end.
+        @SuppressWarnings("unchecked")
+        List<String> layerList = request.containsKey("Layers") && request.get("Layers") instanceof List
+                ? (List<String>) request.get("Layers") : null;
+        if (request.containsKey("Layers")) {
+            validateLayersResolvable(layerList);
+        }
+
         Map<String, Object> requestedVpcConfig = fn.getVpcConfig();
         if (request.get("VpcConfig") instanceof Map<?, ?>) {
             @SuppressWarnings("unchecked")
@@ -545,9 +578,6 @@ public class LambdaService {
         }
 
         if (request.containsKey("Layers")) {
-            @SuppressWarnings("unchecked")
-            List<String> layerList = request.get("Layers") instanceof List
-                    ? (List<String>) request.get("Layers") : null;
             fn.setLayers(layerList != null ? new ArrayList<>(layerList) : new ArrayList<>());
         }
 
