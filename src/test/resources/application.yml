@@ -65,6 +65,8 @@ floci:
         flush-interval-ms: 60000
       rum:
         flush-interval-ms: 60000
+      guardduty:
+        flush-interval-ms: 60000
 
   auth:
     validate-signatures: false
@@ -306,4 +308,6 @@ floci:
       enabled: true
     cloudhsmv2:
     rum:
+      enabled: true
+    guardduty:
       enabled: true
