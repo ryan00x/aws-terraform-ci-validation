@@ -463,7 +463,6 @@ public class CloudWatchLogsService {
     private AwsException invalidNextToken() {
         return new AwsException("InvalidParameterException", "The specified nextToken is invalid.", 400);
     }
-
     /**
      * A FilterLogEvents match paired with the stream that emitted it. FilterLogEvents is the
      * cross-stream API, so the stream is what lets a caller attribute a hit; GetLogEvents needs
