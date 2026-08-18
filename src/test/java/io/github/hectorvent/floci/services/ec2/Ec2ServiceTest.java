@@ -26,6 +26,8 @@ import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.TransitGateway;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayOptions;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRouteTable;
+import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachment;
+import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachmentOptions;
 import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
 import io.github.hectorvent.floci.services.ec2.model.VpcEndpoint;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
@@ -1664,6 +1666,432 @@ class Ec2ServiceTest {
                 Map.of("resource-id", List.of(id))).getFirst().get("resourceType"));
         assertEquals(1, service.describeTags("us-east-1",
                 Map.of("resource-type", List.of("transit-gateway"))).size());
+    }
+
+    // =========================================================================
+    // Transit gateway VPC attachments
+    // =========================================================================
+
+    /** A gateway, a VPC and one subnet per zone, which is what an attachment needs. */
+    private static String[] attachmentFixture(Ec2Service service) {
+        String transitGatewayId = service.createTransitGateway("us-east-1", "hub", null, List.of())
+                .getTransitGatewayId();
+        String vpcId = service.createVpc("us-east-1", "10.90.0.0/16", false).getVpcId();
+        String subnetA = service.createSubnet("us-east-1", vpcId, "10.90.1.0/24", "us-east-1a").getSubnetId();
+        String subnetB = service.createSubnet("us-east-1", vpcId, "10.90.2.0/24", "us-east-1b").getSubnetId();
+        return new String[] {transitGatewayId, vpcId, subnetA, subnetB};
+    }
+
+    /**
+     * The attachment's option defaults are its own, not the gateway's. Verified on a live account:
+     * securityGroupReferencingSupport is enabled here and disabled on the gateway that owns it.
+     */
+    @Test
+    void createVpcAttachmentAppliesTheAttachmentsOwnDefaults() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+
+        TransitGatewayVpcAttachment attachment = service.createTransitGatewayVpcAttachment(
+                "us-east-1", fixture[0], fixture[1], List.of(fixture[2]), null, List.of());
+
+        assertTrue(attachment.getTransitGatewayAttachmentId().startsWith("tgw-attach-"));
+        assertEquals("available", attachment.getState());
+        assertEquals("000000000000", attachment.getVpcOwnerId());
+        assertEquals(List.of(fixture[2]), attachment.getSubnetIds());
+        assertEquals("enable", attachment.getOptions().getDnsSupport());
+        assertEquals("enable", attachment.getOptions().getSecurityGroupReferencingSupport());
+        assertEquals("disable", attachment.getOptions().getIpv6Support());
+        assertEquals("disable", attachment.getOptions().getApplianceModeSupport());
+    }
+
+    /** The association follows the gateway's own default-association setting. */
+    @Test
+    void anAttachmentAssociatesOnlyWhenTheGatewayAsksForIt() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        TransitGateway gateway = service.describeTransitGateways("us-east-1", List.of(fixture[0]), Map.of())
+                .getFirst();
+
+        TransitGatewayVpcAttachment associated = service.createTransitGatewayVpcAttachment(
+                "us-east-1", fixture[0], fixture[1], List.of(fixture[2]), null, List.of());
+        assertEquals(gateway.getOptions().getAssociationDefaultRouteTableId(),
+                associated.getAssociationRouteTableId());
+        assertEquals("associated", associated.getAssociationState());
+
+        TransitGatewayOptions defaultsOff = new TransitGatewayOptions();
+        defaultsOff.setDefaultRouteTableAssociation("disable");
+        defaultsOff.setDefaultRouteTablePropagation("disable");
+        String bareGateway = service.createTransitGateway("us-east-1", "bare", defaultsOff, List.of())
+                .getTransitGatewayId();
+        String otherVpc = service.createVpc("us-east-1", "10.95.0.0/16", false).getVpcId();
+        String otherSubnet = service.createSubnet("us-east-1", otherVpc, "10.95.1.0/24", "us-east-1a")
+                .getSubnetId();
+
+        TransitGatewayVpcAttachment unassociated = service.createTransitGatewayVpcAttachment(
+                "us-east-1", bareGateway, otherVpc, List.of(otherSubnet), null, List.of());
+        assertNull(unassociated.getAssociationRouteTableId());
+        assertNull(unassociated.getAssociationState());
+    }
+
+    /**
+     * One attachment per VPC is a uniqueness rule, so the duplicate check and the write have to be
+     * one step. Reproduces the race: with the two unsynchronized, concurrent creates for the same
+     * VPC both find nothing and both store.
+     */
+    @Test
+    void concurrentAttachmentsForOneVpcLeaveExactlyOne() throws Exception {
+        // Kept deliberately small: without the lock the race shows on the first trial, and this
+        // suite has thread-timing-sensitive tests elsewhere that a heavier harness disturbs.
+        for (int trial = 0; trial < 10; trial++) {
+            Ec2Service service = prefixListService();
+            String[] fixture = attachmentFixture(service);
+            int threads = 6;
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool =
+                    java.util.concurrent.Executors.newFixedThreadPool(threads);
+            List<String> created = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+            List<String> errors = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+            for (int i = 0; i < threads; i++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        created.add(service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                                fixture[1], List.of(fixture[2]), null, List.of())
+                                .getTransitGatewayAttachmentId());
+                    } catch (AwsException expected) {
+                        errors.add(expected.getErrorCode());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+            start.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
+
+            assertEquals(1, created.size(), "trial " + trial + ": exactly one create may win");
+            assertEquals(threads - 1, errors.size(), "every loser is told the VPC is already attached");
+            assertTrue(errors.stream().allMatch("DuplicateTransitGatewayAttachment"::equals), errors.toString());
+            assertEquals(1, service.describeTransitGatewayVpcAttachments("us-east-1", List.of(), Map.of()).size(),
+                    "and only one attachment is stored");
+        }
+    }
+
+    /**
+     * Attaching races deleting the thing being attached to. Whoever wins, the store may never end
+     * up holding an attachment that names a gateway, VPC or subnet which is gone: resolving those
+     * outside the lock that guards the write is what allows exactly that.
+     */
+    @Test
+    void attachingNeverRacesAheadOfDeletingWhatItAttachesTo() throws Exception {
+        record Race(String name, boolean deleteGateway) {}
+        for (Race race : List.of(new Race("gateway", true), new Race("vpc", false))) {
+            for (int trial = 0; trial < 10; trial++) {
+                Ec2Service service = prefixListService();
+                String[] fixture = attachmentFixture(service);
+                java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.ExecutorService pool =
+                        java.util.concurrent.Executors.newFixedThreadPool(2);
+
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        service.createTransitGatewayVpcAttachment("us-east-1", fixture[0], fixture[1],
+                                List.of(fixture[2]), null, List.of());
+                    } catch (AwsException | InterruptedException ignored) {
+                        // Losing the race is a legitimate outcome; the invariant is checked below.
+                    }
+                });
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        if (race.deleteGateway()) {
+                            service.deleteTransitGateway("us-east-1", fixture[0]);
+                        } else {
+                            service.deleteSubnet("us-east-1", fixture[2]);
+                            service.deleteVpc("us-east-1", fixture[1]);
+                        }
+                    } catch (AwsException | InterruptedException ignored) {
+                        // Same.
+                    }
+                });
+                start.countDown();
+                pool.shutdown();
+                assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
+
+                List<TransitGatewayVpcAttachment> attachments =
+                        service.describeTransitGatewayVpcAttachments("us-east-1", List.of(), Map.of());
+                for (TransitGatewayVpcAttachment attachment : attachments) {
+                    assertFalse(service.describeTransitGateways("us-east-1", List.of(), Map.of()).isEmpty(),
+                            race.name() + " trial " + trial + ": attachment outlived its gateway");
+                    assertTrue(service.describeVpcs("us-east-1", List.of(), Map.of()).stream()
+                                    .anyMatch(vpc -> vpc.getVpcId().equals(attachment.getVpcId())),
+                            race.name() + " trial " + trial + ": attachment names a deleted VPC");
+                    for (String subnetId : attachment.getSubnetIds()) {
+                        assertTrue(service.describeSubnets("us-east-1", List.of(subnetId), Map.of()).stream()
+                                        .anyMatch(subnet -> subnet.getSubnetId().equals(subnetId)),
+                                race.name() + " trial " + trial + ": attachment names a deleted subnet");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Tagging is a read-modify-write, so a tag call racing a delete must not put the record back.
+     * A resurrected attachment would keep blocking the VPC and subnets it names, and a resurrected
+     * gateway would keep blocking its own deletion, with nothing left to delete either of them.
+     */
+    @Test
+    void taggingCannotResurrectSomethingBeingDeleted() throws Exception {
+        for (boolean attachment : List.of(true, false)) {
+            for (int trial = 0; trial < 10; trial++) {
+                Ec2Service service = prefixListService();
+                String[] fixture = attachmentFixture(service);
+                String attachmentId = service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                        fixture[1], List.of(fixture[2]), null, List.of()).getTransitGatewayAttachmentId();
+                String target = attachment ? attachmentId : fixture[0];
+                if (!attachment) {
+                    service.deleteTransitGatewayVpcAttachment("us-east-1", attachmentId);
+                }
+                java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.ExecutorService pool =
+                        java.util.concurrent.Executors.newFixedThreadPool(2);
+
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        service.createTags("us-east-1", List.of(target), List.of(new Tag("env", "prod")));
+                    } catch (AwsException | InterruptedException ignored) {
+                        // Losing the race is fine; the invariant is below.
+                    }
+                });
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        if (attachment) {
+                            service.deleteTransitGatewayVpcAttachment("us-east-1", target);
+                        } else {
+                            service.deleteTransitGateway("us-east-1", target);
+                        }
+                    } catch (AwsException | InterruptedException ignored) {
+                        // Same.
+                    }
+                });
+                start.countDown();
+                pool.shutdown();
+                assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
+
+                String what = attachment ? "attachment" : "gateway";
+                if (attachment) {
+                    assertTrue(service.describeTransitGatewayVpcAttachments("us-east-1", List.of(), Map.of())
+                            .isEmpty(), what + " trial " + trial + ": tagging put the deleted record back");
+                } else {
+                    assertTrue(service.describeTransitGateways("us-east-1", List.of(), Map.of()).stream()
+                                    .noneMatch(g -> g.getTransitGatewayId().equals(target)),
+                            what + " trial " + trial + ": tagging put the deleted record back");
+                }
+            }
+        }
+    }
+
+    /**
+     * Verified on a live account: an attached VPC or subnet cannot be deleted out from under the
+     * attachment, and both report the same {@code DependencyViolation}. Without this the stored
+     * attachment would go on naming resources that no longer exist, and a later modify would fail
+     * on a subnet the caller never touched.
+     */
+    @Test
+    void anAttachedVpcOrSubnetCannotBeDeleted() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        String attachmentId = service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                fixture[1], List.of(fixture[2]), null, List.of()).getTransitGatewayAttachmentId();
+
+        assertEquals("DependencyViolation", assertThrows(AwsException.class,
+                () -> service.deleteSubnet("us-east-1", fixture[2])).getErrorCode());
+        assertEquals("DependencyViolation", assertThrows(AwsException.class,
+                () -> service.deleteVpc("us-east-1", fixture[1])).getErrorCode());
+
+        // A subnet of the same VPC that the attachment does not use is free to go.
+        service.deleteSubnet("us-east-1", fixture[3]);
+
+        service.deleteTransitGatewayVpcAttachment("us-east-1", attachmentId);
+        service.deleteSubnet("us-east-1", fixture[2]);
+        service.deleteVpc("us-east-1", fixture[1]);
+    }
+
+    /**
+     * An attachment must be created with at least one subnet. Modify refuses to leave one without
+     * any, so creation must not be a back door into the state modify forbids.
+     */
+    @Test
+    void anAttachmentCannotBeCreatedWithoutSubnets() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+
+        assertEquals("MissingParameter", assertThrows(AwsException.class,
+                () -> service.createTransitGatewayVpcAttachment("us-east-1", fixture[0], fixture[1],
+                        List.of(), null, List.of())).getErrorCode());
+    }
+
+    /**
+     * Verified on a live account: disabling the gateway's default association clears the id on the
+     * gateway but leaves an existing attachment associated. The association was made when the
+     * attachment was created, and only later attachments are affected.
+     */
+    @Test
+    void anExistingAssociationSurvivesTheGatewayDisablingItsDefault() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        TransitGatewayVpcAttachment attachment = service.createTransitGatewayVpcAttachment(
+                "us-east-1", fixture[0], fixture[1], List.of(fixture[2]), null, List.of());
+        String routeTableId = attachment.getAssociationRouteTableId();
+
+        TransitGatewayOptions disable = new TransitGatewayOptions();
+        disable.setDefaultRouteTableAssociation("disable");
+        TransitGateway gateway = service.modifyTransitGateway("us-east-1", fixture[0], null, disable,
+                List.of(), List.of());
+
+        assertNull(gateway.getOptions().getAssociationDefaultRouteTableId(), "the gateway drops its id");
+        TransitGatewayVpcAttachment after = service.describeTransitGatewayVpcAttachments("us-east-1",
+                List.of(attachment.getTransitGatewayAttachmentId()), Map.of()).getFirst();
+        assertEquals(routeTableId, after.getAssociationRouteTableId(),
+                "the attachment keeps the association it was created with");
+        assertEquals("associated", after.getAssociationState());
+    }
+
+    /**
+     * Verified live: an attachment id of the wrong shape is rejected before the lookup, under the
+     * attachment's own malformed code, matching how a malformed gateway id behaves.
+     */
+    @Test
+    void aMalformedAttachmentIdIsRejectedBeforeTheLookup() {
+        Ec2Service service = prefixListService();
+
+        for (String malformed : List.of("tgw-attach-nope", "vpc-0123456789abcdef0")) {
+            assertEquals("InvalidTransitGatewayAttachmentID.Malformed", assertThrows(AwsException.class,
+                    () -> service.describeTransitGatewayVpcAttachments("us-east-1", List.of(malformed), Map.of()))
+                    .getErrorCode(), malformed);
+        }
+        assertEquals("InvalidTransitGatewayAttachmentID.NotFound", assertThrows(AwsException.class,
+                () -> service.describeTransitGatewayVpcAttachments("us-east-1",
+                        List.of("tgw-attach-0123456789abcdef0"), Map.of())).getErrorCode(),
+                "a well-formed id that does not exist is a different failure");
+    }
+
+    /** The gateway's owner is its own field, sourced from the gateway rather than from the VPC. */
+    @Test
+    void anAttachmentRecordsBothOwnersSeparately() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+
+        TransitGatewayVpcAttachment attachment = service.createTransitGatewayVpcAttachment(
+                "us-east-1", fixture[0], fixture[1], List.of(fixture[2]), null, List.of());
+
+        TransitGateway gateway = service.describeTransitGateways("us-east-1", List.of(fixture[0]), Map.of())
+                .getFirst();
+        assertEquals(gateway.getOwnerId(), attachment.getTransitGatewayOwnerId());
+        assertEquals("000000000000", attachment.getVpcOwnerId());
+    }
+
+    @Test
+    void aVpcCanOnlyBeAttachedToAGatewayOnce() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        service.createTransitGatewayVpcAttachment("us-east-1", fixture[0], fixture[1],
+                List.of(fixture[2]), null, List.of());
+
+        AwsException error = assertThrows(AwsException.class, () -> service.createTransitGatewayVpcAttachment(
+                "us-east-1", fixture[0], fixture[1], List.of(fixture[3]), null, List.of()));
+        assertEquals("DuplicateTransitGatewayAttachment", error.getErrorCode());
+    }
+
+    /** Verified live: a subnet from another VPC is reported missing rather than mismatched. */
+    @Test
+    void subnetsMustBelongToTheAttachedVpcAndBeOnePerZone() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        String otherVpc = service.createVpc("us-east-1", "10.96.0.0/16", false).getVpcId();
+        String foreignSubnet = service.createSubnet("us-east-1", otherVpc, "10.96.1.0/24", "us-east-1a")
+                .getSubnetId();
+
+        assertEquals("InvalidSubnetID.NotFound", assertThrows(AwsException.class,
+                () -> service.createTransitGatewayVpcAttachment("us-east-1", fixture[0], fixture[1],
+                        List.of(foreignSubnet), null, List.of())).getErrorCode());
+
+        String sameZoneSubnet = service.createSubnet("us-east-1", fixture[1], "10.90.9.0/24", "us-east-1a")
+                .getSubnetId();
+        assertEquals("DuplicateSubnetsInSameZone", assertThrows(AwsException.class,
+                () -> service.createTransitGatewayVpcAttachment("us-east-1", fixture[0], fixture[1],
+                        List.of(fixture[2], sameZoneSubnet), null, List.of())).getErrorCode());
+    }
+
+    @Test
+    void modifyVpcAttachmentAddsAndRemovesSubnetsAndOptions() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        String attachmentId = service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                fixture[1], List.of(fixture[2]), null, List.of()).getTransitGatewayAttachmentId();
+        TransitGatewayVpcAttachmentOptions changes = new TransitGatewayVpcAttachmentOptions();
+        changes.setDnsSupport("disable");
+
+        TransitGatewayVpcAttachment widened = service.modifyTransitGatewayVpcAttachment("us-east-1",
+                attachmentId, List.of(fixture[3]), List.of(), changes);
+        assertEquals(List.of(fixture[2], fixture[3]), widened.getSubnetIds());
+        assertEquals("disable", widened.getOptions().getDnsSupport());
+        assertEquals("enable", widened.getOptions().getSecurityGroupReferencingSupport(),
+                "an untouched option keeps its value");
+
+        TransitGatewayVpcAttachment narrowed = service.modifyTransitGatewayVpcAttachment("us-east-1",
+                attachmentId, List.of(), List.of(fixture[2]), null);
+        assertEquals(List.of(fixture[3]), narrowed.getSubnetIds());
+
+        assertEquals("InvalidSubnetID.NotFound", assertThrows(AwsException.class,
+                () -> service.modifyTransitGatewayVpcAttachment("us-east-1", attachmentId,
+                        List.of(), List.of(fixture[2]), null)).getErrorCode(),
+                "removing a subnet that is not attached");
+
+        assertEquals("InsufficientSubnetsException", assertThrows(AwsException.class,
+                () -> service.modifyTransitGatewayVpcAttachment("us-east-1", attachmentId,
+                        List.of(), List.of(fixture[3]), null)).getErrorCode(),
+                "an attachment cannot be left with no subnets");
+    }
+
+    /** Verified live: the gateway refuses to go while anything is still attached to it. */
+    @Test
+    void aGatewayWithAnAttachmentCannotBeDeleted() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        String attachmentId = service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                fixture[1], List.of(fixture[2]), null, List.of()).getTransitGatewayAttachmentId();
+
+        AwsException error = assertThrows(AwsException.class,
+                () -> service.deleteTransitGateway("us-east-1", fixture[0]));
+        assertEquals("IncorrectState", error.getErrorCode());
+        assertTrue(error.getMessage().contains(attachmentId), "the message names the attachment");
+
+        service.deleteTransitGatewayVpcAttachment("us-east-1", attachmentId);
+        assertEquals("deleted", service.deleteTransitGateway("us-east-1", fixture[0]).getState(),
+                "the gateway goes once the attachment has");
+    }
+
+    @Test
+    void tagsOnAnAttachmentAreTypedAsTransitGatewayAttachment() {
+        Ec2Service service = prefixListService();
+        String[] fixture = attachmentFixture(service);
+        String attachmentId = service.createTransitGatewayVpcAttachment("us-east-1", fixture[0],
+                fixture[1], List.of(fixture[2]), null, List.of(new Tag("Name", "hub-attach")))
+                .getTransitGatewayAttachmentId();
+
+        assertEquals("transit-gateway-attachment", service.describeTags("us-east-1",
+                Map.of("resource-id", List.of(attachmentId))).getFirst().get("resourceType"));
+
+        service.createTags("us-east-1", List.of(attachmentId), List.of(new Tag("env", "prod")));
+        assertEquals(2, service.describeTransitGatewayVpcAttachments("us-east-1",
+                List.of(attachmentId), Map.of()).getFirst().getTags().size(),
+                "describe serves tags added after creation");
     }
 
     private static EmulatorConfig mockConfig(boolean ec2Mock) {
