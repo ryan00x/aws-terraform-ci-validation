@@ -64,6 +64,8 @@ public class RdsService implements Resettable {
 
     private static final Logger LOG = Logger.getLogger(RdsService.class);
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Value AWS reports as the OwningService of a secret RDS manages. */
+    private static final String MANAGED_SECRET_OWNING_SERVICE = "rds";
     private static final List<ManagedClusterParameterGroup> MANAGED_CLUSTER_PARAMETER_GROUPS = List.of(
             managedDefault("aurora-mysql5.7"),
             managedDefault("aurora-mysql8.0"),
@@ -316,6 +318,7 @@ public class RdsService implements Resettable {
         restoreClusters();
         restoreInstances();
         restoreProxies();
+        backfillManagedSecretOwnership();
     }
 
     public void clear() {
@@ -733,19 +736,60 @@ public class RdsService implements Resettable {
                 ? regionFromArn(resourceName) : regionResolver.getDefaultRegion();
     }
 
+    /**
+     * Marks the master user secrets of persisted instances as owned by RDS. An instance stored
+     * before floci tracked ownership refers to a secret that would otherwise read as an ordinary
+     * one, and so would refuse the Lambda-free rotation these secrets are rotated with. RDS state
+     * is what makes the secret managed, so the instance is what this reads — never the name.
+     *
+     * <p>Runs from {@link #restorePersistedRuntime()} rather than from its own {@code StartupEvent}
+     * observer: the lifecycle calls that after {@code storageFactory.loadAll()}, whereas two
+     * observers of the same event have no ordering between them, and a reload would discard these
+     * writes before they were flushed.
+     */
+    void backfillManagedSecretOwnership() {
+        if (secretsManagerService == null) {
+            return;
+        }
+        // Reading persisted state must not be able to stop the emulator from starting.
+        try {
+            for (DbInstance instance : allInstances()) {
+                String secretArn = instance.getMasterUserSecretArn();
+                if (secretArn == null) {
+                    continue;
+                }
+                try {
+                    // The secret's ARN names its own account and region, neither of which a
+                    // startup backfill has a request context to infer.
+                    secretsManagerService.markOwnedByService(secretArn, MANAGED_SECRET_OWNING_SERVICE);
+                } catch (RuntimeException e) {
+                    LOG.debugv(e, "Could not mark master user secret {0} as service-managed", secretArn);
+                }
+            }
+        } catch (RuntimeException e) {
+            LOG.warnv(e, "Skipped the master user secret ownership backfill");
+        }
+    }
+
     private void attachManagedMasterUserSecret(DbInstance instance, String region, String kmsKeyId) {
         if (secretsManagerService == null) {
             throw new AwsException("InvalidParameterCombination",
                     "ManageMasterUserPassword requires Secrets Manager support.", 400);
         }
         String secretName = "rds!" + instance.getDbiResourceId();
+        // RDS owns the secret it manages: it rotates the master password itself, so the secret
+        // carries no rotation Lambda. AWS marks that with OwningService and these two tags.
+        List<Secret.Tag> tags = List.of(
+                new Secret.Tag("aws:rds:primaryDBInstanceArn", instance.getDbInstanceArn()),
+                new Secret.Tag("aws:secretsmanager:owningService", MANAGED_SECRET_OWNING_SERVICE));
         Secret secret = secretsManagerService.createSecret(
                 secretName,
                 managedMasterSecretString(instance),
                 null,
                 "Managed RDS master user secret for " + instance.getDbInstanceIdentifier(),
                 kmsKeyId,
-                null,
+                tags,
+                MANAGED_SECRET_OWNING_SERVICE,
                 region);
         instance.setMasterUserSecretArn(secret.getArn());
         instance.setMasterUserSecretStatus("active");
