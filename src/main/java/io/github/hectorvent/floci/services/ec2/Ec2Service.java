@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -75,7 +76,9 @@ import io.github.hectorvent.floci.services.ec2.model.Subnet;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.TransitGateway;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayOptions;
+import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRoute;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRouteTable;
+import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRouteTablePropagation;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachment;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachmentOptions;
 import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
@@ -104,6 +107,8 @@ public class Ec2Service implements ContainerTeardown {
     // The ASN AWS assigns when CreateTransitGateway omits Options.AmazonSideAsn.
     private static final long DEFAULT_AMAZON_SIDE_ASN = 64512L;
     private static final Pattern TRANSIT_GATEWAY_ID_PATTERN = Pattern.compile("^tgw-[0-9a-f]{8}([0-9a-f]{9})?$");
+    private static final Pattern TRANSIT_GATEWAY_ROUTE_TABLE_ID_PATTERN =
+            Pattern.compile("^tgw-rtb-[0-9a-f]{8}([0-9a-f]{9})?$");
     private static final Pattern TRANSIT_GATEWAY_ATTACHMENT_ID_PATTERN =
             Pattern.compile("^tgw-attach-[0-9a-f]{8}([0-9a-f]{9})?$");
 
@@ -139,6 +144,8 @@ public class Ec2Service implements ContainerTeardown {
     private final StorageBackend<String, TransitGateway> transitGateways;
     private final StorageBackend<String, TransitGatewayRouteTable> transitGatewayRouteTables;
     private final StorageBackend<String, TransitGatewayVpcAttachment> transitGatewayVpcAttachments;
+    private final StorageBackend<String, TransitGatewayRouteTablePropagation> transitGatewayPropagations;
+    private final StorageBackend<String, TransitGatewayRoute> transitGatewayRoutes;
     // resourceId → List<Tag>
     private final StorageBackend<String, List<Tag>> tags;
     private final Set<String> seededRegions = ConcurrentHashMap.newKeySet();
@@ -174,7 +181,11 @@ public class Ec2Service implements ContainerTeardown {
                 storageFactory.create("ec2", "ec2-transit-gateway-route-tables.json",
                         new TypeReference<Map<String, TransitGatewayRouteTable>>() {}),
                 storageFactory.create("ec2", "ec2-transit-gateway-vpc-attachments.json",
-                        new TypeReference<Map<String, TransitGatewayVpcAttachment>>() {}));
+                        new TypeReference<Map<String, TransitGatewayVpcAttachment>>() {}),
+                storageFactory.create("ec2", "ec2-transit-gateway-propagations.json",
+                        new TypeReference<Map<String, TransitGatewayRouteTablePropagation>>() {}),
+                storageFactory.create("ec2", "ec2-transit-gateway-routes.json",
+                        new TypeReference<Map<String, TransitGatewayRoute>>() {}));
     }
 
     // Package-private for hermetic tests (pass in-memory or temp-dir-backed StorageBackends directly).
@@ -205,7 +216,8 @@ public class Ec2Service implements ContainerTeardown {
                 vpcs, subnets, securityGroups, securityGroupRules, internetGateways, routeTables, keyPairs,
                 addresses, instances, volumes, registeredImages, snapshots, launchTemplates, vpcEndpoints,
                 natGateways, spotInstanceRequests, networkAcls, managedPrefixLists, tags,
-                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>());
+                new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
+                new InMemoryStorage<>(), new InMemoryStorage<>());
     }
 
     // Package-private for hermetic tests, transit-gateway-aware. The shorter overload above keeps its
@@ -235,7 +247,9 @@ public class Ec2Service implements ContainerTeardown {
                StorageBackend<String, List<Tag>> tags,
                StorageBackend<String, TransitGateway> transitGateways,
                StorageBackend<String, TransitGatewayRouteTable> transitGatewayRouteTables,
-               StorageBackend<String, TransitGatewayVpcAttachment> transitGatewayVpcAttachments) {
+               StorageBackend<String, TransitGatewayVpcAttachment> transitGatewayVpcAttachments,
+               StorageBackend<String, TransitGatewayRouteTablePropagation> transitGatewayPropagations,
+               StorageBackend<String, TransitGatewayRoute> transitGatewayRoutes) {
         this.accountId = config.defaultAccountId();
         this.config = config;
         this.containerManager = containerManager;
@@ -265,6 +279,8 @@ public class Ec2Service implements ContainerTeardown {
         this.transitGateways = transitGateways;
         this.transitGatewayRouteTables = transitGatewayRouteTables;
         this.transitGatewayVpcAttachments = transitGatewayVpcAttachments;
+        this.transitGatewayPropagations = transitGatewayPropagations;
+        this.transitGatewayRoutes = transitGatewayRoutes;
     }
 
     @PostConstruct
@@ -911,6 +927,9 @@ public class Ec2Service implements ContainerTeardown {
      */
     public TransitGateway createTransitGateway(String region, String description,
                                                TransitGatewayOptions requested, List<Tag> gatewayTags) {
+        // Held here too, so the rule needs no exceptions: every write to a gateway, route table,
+        // attachment, propagation or route happens under this one lock.
+        synchronized (attachmentTopologyLock(region)) {
         String transitGatewayId = "tgw-" + randomHex(17);
         TransitGateway gateway = new TransitGateway();
         gateway.setTransitGatewayId(transitGatewayId);
@@ -941,6 +960,7 @@ public class Ec2Service implements ContainerTeardown {
         }
         transitGateways.put(key(region, transitGatewayId), gateway);
         return gateway;
+        }
     }
 
     private TransitGatewayOptions resolveTransitGatewayOptions(TransitGatewayOptions requested) {
@@ -1023,6 +1043,10 @@ public class Ec2Service implements ContainerTeardown {
     public TransitGateway modifyTransitGateway(String region, String transitGatewayId, String description,
                                                TransitGatewayOptions changes, List<String> addCidrBlocks,
                                                List<String> removeCidrBlocks) {
+        // Outermost first, as the deletes take it: this writes route tables through
+        // markDefaultRouteTable, and a delete running between the read and that write would be
+        // undone by it.
+        synchronized (attachmentTopologyLock(region)) {
         synchronized (lockFor(key(region, transitGatewayId))) {
             TransitGateway gateway = getRequiredTransitGateway(region, transitGatewayId);
             requireCoherentDefaultRouteTableChange(region, gateway, changes);
@@ -1043,6 +1067,7 @@ public class Ec2Service implements ContainerTeardown {
             }
             transitGateways.put(key(region, transitGatewayId), gateway);
             return gateway;
+        }
         }
     }
 
@@ -1239,8 +1264,18 @@ public class Ec2Service implements ContainerTeardown {
                     .filter(routeTable -> region.equals(routeTable.getRegion()))
                     .filter(routeTable -> transitGatewayId.equals(routeTable.getTransitGatewayId()))
                     .toList()
-                    .forEach(routeTable -> transitGatewayRouteTables
-                            .delete(key(region, routeTable.getTransitGatewayRouteTableId())));
+                    .forEach(routeTable -> {
+                        // What the table owned goes with it, or the propagations and routes
+                        // outlive the table they belong to and nothing can reach them again.
+                        String routeTableId = routeTable.getTransitGatewayRouteTableId();
+                        propagationsOf(region, routeTableId).forEach(propagation -> transitGatewayPropagations
+                                .delete(propagationKey(region, routeTableId,
+                                        propagation.getTransitGatewayAttachmentId())));
+                        routesOf(region, routeTableId).forEach(route -> transitGatewayRoutes
+                                .delete(routeKey(region, routeTableId, route.getDestinationCidrBlock())));
+                        transitGatewayRouteTables.delete(key(region, routeTableId));
+                        tags.delete(routeTableId);
+                    });
             transitGateways.delete(key(region, transitGatewayId));
             tags.delete(transitGatewayId);
             gateway.setState("deleted");
@@ -1451,9 +1486,33 @@ public class Ec2Service implements ContainerTeardown {
         }
     }
 
+    /**
+     * Deletes a VPC attachment and settles what pointed at it. Verified on a live account: the
+     * attachment's propagations disappear, while a static route that named it survives as a
+     * blackhole rather than being removed — the destination is still configured, it simply has
+     * nowhere to go now.
+     */
     public TransitGatewayVpcAttachment deleteTransitGatewayVpcAttachment(String region, String attachmentId) {
         synchronized (attachmentTopologyLock(region)) {
             TransitGatewayVpcAttachment attachment = getRequiredVpcAttachment(region, attachmentId);
+            transitGatewayPropagations.scan(k -> true).stream()
+                    .filter(propagation -> region.equals(propagation.getRegion()))
+                    .filter(propagation -> attachmentId.equals(propagation.getTransitGatewayAttachmentId()))
+                    .toList()
+                    .forEach(propagation -> transitGatewayPropagations.delete(propagationKey(region,
+                            propagation.getTransitGatewayRouteTableId(), attachmentId)));
+            transitGatewayRoutes.scan(k -> true).stream()
+                    .filter(route -> region.equals(route.getRegion()))
+                    .filter(route -> attachmentId.equals(route.getTransitGatewayAttachmentId()))
+                    .toList()
+                    .forEach(route -> {
+                        route.setState("blackhole");
+                        route.setTransitGatewayAttachmentId(null);
+                        route.setResourceId(null);
+                        route.setResourceType(null);
+                        transitGatewayRoutes.put(routeKey(region, route.getTransitGatewayRouteTableId(),
+                                route.getDestinationCidrBlock()), route);
+                    });
             transitGatewayVpcAttachments.delete(key(region, attachmentId));
             tags.delete(attachmentId);
             attachment.setState("deleted");
@@ -1469,6 +1528,496 @@ public class Ec2Service implements ContainerTeardown {
         if (!TRANSIT_GATEWAY_ATTACHMENT_ID_PATTERN.matcher(attachmentId).matches()) {
             throw new AwsException("InvalidTransitGatewayAttachmentID.Malformed",
                     "Invalid Transit Gateway Attachment id.", 400);
+        }
+    }
+
+    // ─── Transit Gateway Route Tables, Associations, Propagations and Routes ───
+
+    /**
+     * An attachment reached through a route table has to hang off the same gateway. Verified on a
+     * live account: associating, propagating or routing to an attachment of another gateway is
+     * refused as though the attachment did not exist, rather than with a mismatch of its own.
+     */
+    private TransitGatewayVpcAttachment requireAttachmentOfSameGateway(
+            String region, TransitGatewayRouteTable routeTable, String attachmentId) {
+        TransitGatewayVpcAttachment attachment = getRequiredVpcAttachment(region, attachmentId);
+        if (!routeTable.getTransitGatewayId().equals(attachment.getTransitGatewayId())) {
+            throw new AwsException("InvalidTransitGatewayAttachmentID.NotFound",
+                    "Transit Gateway Attachment " + attachmentId + " was deleted or does not exist.", 400);
+        }
+        return attachment;
+    }
+
+    public TransitGatewayRouteTable createTransitGatewayRouteTable(
+            String region, String transitGatewayId, List<Tag> routeTableTags) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGateway gateway = getRequiredTransitGateway(region, transitGatewayId);
+            TransitGatewayRouteTable routeTable = new TransitGatewayRouteTable();
+            String routeTableId = "tgw-rtb-" + randomHex(17);
+            routeTable.setTransitGatewayRouteTableId(routeTableId);
+            routeTable.setTransitGatewayId(gateway.getTransitGatewayId());
+            // AWS reports pending and settles on available; nothing is slow locally.
+            routeTable.setState("available");
+            // A table asked for by name is never either default; only the one the gateway mints is.
+            routeTable.setDefaultAssociationRouteTable(false);
+            routeTable.setDefaultPropagationRouteTable(false);
+            routeTable.setCreationTime(ISO_FMT.format(Instant.now()));
+            routeTable.setRegion(region);
+            if (routeTableTags != null && !routeTableTags.isEmpty()) {
+                routeTable.setTags(new ArrayList<>(routeTableTags));
+                tags.put(routeTableId, new ArrayList<>(routeTableTags));
+            }
+            transitGatewayRouteTables.put(key(region, routeTableId), routeTable);
+            return routeTable;
+        }
+    }
+
+    public List<TransitGatewayRouteTable> describeTransitGatewayRouteTables(
+            String region, List<String> routeTableIds, Map<String, List<String>> filters) {
+        routeTableIds.forEach(Ec2Service::requireWellFormedRouteTableId);
+        List<TransitGatewayRouteTable> all = transitGatewayRouteTables.scan(k -> true).stream()
+                .filter(routeTable -> region.equals(routeTable.getRegion()))
+                .collect(Collectors.toList());
+        for (String routeTableId : routeTableIds) {
+            if (all.stream().noneMatch(rt -> rt.getTransitGatewayRouteTableId().equals(routeTableId))) {
+                throw new AwsException("InvalidRouteTableID.NotFound",
+                        "Transit Gateway Route Table " + routeTableId + " was deleted or does not exist.", 400);
+            }
+        }
+        return all.stream()
+                .filter(rt -> routeTableIds.isEmpty() || routeTableIds.contains(rt.getTransitGatewayRouteTableId()))
+                .filter(rt -> matchesFilters(rt, filters, region))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Verified live: a route table will not go while it is a gateway's default association table,
+     * nor while attachments are associated with it, and the two refusals carry different messages
+     * under one {@code IncorrectState} code.
+     */
+    public TransitGatewayRouteTable deleteTransitGatewayRouteTable(String region, String routeTableId) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            TransitGateway gateway = transitGatewayRouteTables.get(key(region, routeTableId))
+                    .map(TransitGatewayRouteTable::getTransitGatewayId)
+                    .flatMap(id -> transitGateways.get(key(region, id)))
+                    .orElse(null);
+            if (gateway != null
+                    && (routeTableId.equals(gateway.getOptions().getAssociationDefaultRouteTableId())
+                        || routeTableId.equals(gateway.getOptions().getPropagationDefaultRouteTableId()))) {
+                throw new AwsException("IncorrectState", routeTableId
+                        + " is set as default association route table for " + gateway.getTransitGatewayId(), 400);
+            }
+            if (!associationsOf(region, routeTableId).isEmpty()) {
+                throw new AwsException("IncorrectState", routeTableId + " has associated attachments", 400);
+            }
+            propagationsOf(region, routeTableId).forEach(propagation -> transitGatewayPropagations
+                    .delete(propagationKey(region, routeTableId, propagation.getTransitGatewayAttachmentId())));
+            routesOf(region, routeTableId).forEach(route -> transitGatewayRoutes
+                    .delete(routeKey(region, routeTableId, route.getDestinationCidrBlock())));
+            transitGatewayRouteTables.delete(key(region, routeTableId));
+            tags.delete(routeTableId);
+            routeTable.setState("deleted");
+            return routeTable;
+        }
+    }
+
+    /** An attachment associates with exactly one route table, so a second attempt is refused. */
+    public TransitGatewayVpcAttachment associateTransitGatewayRouteTable(
+            String region, String routeTableId, String attachmentId) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            TransitGatewayVpcAttachment attachment =
+                    requireAttachmentOfSameGateway(region, routeTable, attachmentId);
+            if (attachment.getAssociationRouteTableId() != null) {
+                throw new AwsException("Resource.AlreadyAssociated", "Transit Gateway Attachment "
+                        + attachmentId + " is already associated to a route table.", 400);
+            }
+            attachment.setAssociationRouteTableId(routeTableId);
+            attachment.setAssociationState("associated");
+            transitGatewayVpcAttachments.put(key(region, attachmentId), attachment);
+            return attachment;
+        }
+    }
+
+    public TransitGatewayVpcAttachment disassociateTransitGatewayRouteTable(
+            String region, String routeTableId, String attachmentId) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            TransitGatewayVpcAttachment attachment =
+                    requireAttachmentOfSameGateway(region, routeTable, attachmentId);
+            if (!routeTableId.equals(attachment.getAssociationRouteTableId())) {
+                throw new AwsException("InvalidparameterValue", "Transit Gateway Attachment "
+                        + attachmentId + " is not associated with route table " + routeTableId + ".", 400);
+            }
+            attachment.setAssociationRouteTableId(null);
+            attachment.setAssociationState(null);
+            transitGatewayVpcAttachments.put(key(region, attachmentId), attachment);
+            return attachment;
+        }
+    }
+
+    /** The attachments associated with a route table, which is where an association is recorded. */
+    public List<TransitGatewayVpcAttachment> associationsOf(String region, String routeTableId) {
+        return transitGatewayVpcAttachments.scan(k -> true).stream()
+                .filter(attachment -> region.equals(attachment.getRegion()))
+                .filter(attachment -> routeTableId.equals(attachment.getAssociationRouteTableId()))
+                .collect(Collectors.toList());
+    }
+
+    public TransitGatewayRouteTablePropagation enableTransitGatewayRouteTablePropagation(
+            String region, String routeTableId, String attachmentId) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            TransitGatewayVpcAttachment attachment =
+                    requireAttachmentOfSameGateway(region, routeTable, attachmentId);
+            if (transitGatewayPropagations.get(propagationKey(region, routeTableId, attachmentId)).isPresent()) {
+                throw new AwsException("TransitGatewayRouteTablePropagation.Duplicate", "Propagation "
+                        + attachmentId + " already exists in Transit Gateway Route Table " + routeTableId + ".", 400);
+            }
+            TransitGatewayRouteTablePropagation propagation = new TransitGatewayRouteTablePropagation();
+            propagation.setTransitGatewayRouteTableId(routeTableId);
+            propagation.setTransitGatewayAttachmentId(attachmentId);
+            propagation.setResourceId(attachment.getVpcId());
+            propagation.setResourceType("vpc");
+            // Verified live: propagation reports the settled state at once, where association
+            // reports associating first.
+            propagation.setState("enabled");
+            propagation.setRegion(region);
+            transitGatewayPropagations.put(propagationKey(region, routeTableId, attachmentId), propagation);
+            return propagation;
+        }
+    }
+
+    public TransitGatewayRouteTablePropagation disableTransitGatewayRouteTablePropagation(
+            String region, String routeTableId, String attachmentId) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            requireAttachmentOfSameGateway(region, routeTable, attachmentId);
+            TransitGatewayRouteTablePropagation propagation = transitGatewayPropagations
+                    .get(propagationKey(region, routeTableId, attachmentId))
+                    .orElseThrow(() -> new AwsException("InvalidparameterValue", "Propagation "
+                            + attachmentId + " does not exist in Transit Gateway Route Table "
+                            + routeTableId + ".", 400));
+            transitGatewayPropagations.delete(propagationKey(region, routeTableId, attachmentId));
+            propagation.setState("disabled");
+            return propagation;
+        }
+    }
+
+    public List<TransitGatewayRouteTablePropagation> propagationsOf(String region, String routeTableId) {
+        return transitGatewayPropagations.scan(k -> true).stream()
+                .filter(propagation -> region.equals(propagation.getRegion()))
+                .filter(propagation -> routeTableId.equals(propagation.getTransitGatewayRouteTableId()))
+                .collect(Collectors.toList());
+    }
+
+    public TransitGatewayRoute createTransitGatewayRoute(String region, String routeTableId,
+                                                         String destinationCidrBlock, String attachmentId,
+                                                         boolean blackhole) {
+        synchronized (attachmentTopologyLock(region)) {
+            getRequiredTransitGatewayRouteTable(region, routeTableId);
+            if (destinationCidrBlock == null || destinationCidrBlock.isBlank()) {
+                throw new AwsException("MissingParameter",
+                        "The request must contain the parameter DestinationCidrBlock.", 400);
+            }
+            if (transitGatewayRoutes.get(routeKey(region, routeTableId, destinationCidrBlock)).isPresent()) {
+                throw new AwsException("RouteAlreadyExists", "Route " + destinationCidrBlock
+                        + " already exists in Transit Gateway Route Table " + routeTableId + ".", 400);
+            }
+            TransitGatewayRoute route = new TransitGatewayRoute();
+            route.setTransitGatewayRouteTableId(routeTableId);
+            route.setDestinationCidrBlock(destinationCidrBlock);
+            // A blackhole is a state of a static route rather than a type, and carries no
+            // attachment even when one was named.
+            route.setType("static");
+            route.setState(blackhole ? "blackhole" : "active");
+            route.setRegion(region);
+            if (!blackhole) {
+                TransitGatewayVpcAttachment attachment = requireAttachmentOfSameGateway(region,
+                        getRequiredTransitGatewayRouteTable(region, routeTableId), attachmentId);
+                route.setTransitGatewayAttachmentId(attachmentId);
+                route.setResourceId(attachment.getVpcId());
+                route.setResourceType("vpc");
+            }
+            transitGatewayRoutes.put(routeKey(region, routeTableId, destinationCidrBlock), route);
+            return route;
+        }
+    }
+
+    /**
+     * Replaces a route's target, and writes the route when it is not there. Verified on a live
+     * account: replacing a destination the table has never held creates it rather than reporting
+     * it missing, so this is an upsert and not an update.
+     */
+    public TransitGatewayRoute replaceTransitGatewayRoute(String region, String routeTableId,
+                                                          String destinationCidrBlock, String attachmentId,
+                                                          boolean blackhole) {
+        synchronized (attachmentTopologyLock(region)) {
+            TransitGatewayRouteTable routeTable = getRequiredTransitGatewayRouteTable(region, routeTableId);
+            if (destinationCidrBlock == null || destinationCidrBlock.isBlank()) {
+                throw new AwsException("MissingParameter",
+                        "The request must contain the parameter DestinationCidrBlock.", 400);
+            }
+            TransitGatewayRoute route = transitGatewayRoutes
+                    .get(routeKey(region, routeTableId, destinationCidrBlock))
+                    .orElseGet(TransitGatewayRoute::new);
+            route.setTransitGatewayRouteTableId(routeTableId);
+            route.setDestinationCidrBlock(destinationCidrBlock);
+            route.setType("static");
+            route.setRegion(region);
+            // The target moves as one: a blackhole keeps no attachment, and pointing the route at
+            // an attachment again restores all three fields together.
+            if (blackhole) {
+                route.setState("blackhole");
+                route.setTransitGatewayAttachmentId(null);
+                route.setResourceId(null);
+                route.setResourceType(null);
+            } else {
+                TransitGatewayVpcAttachment attachment =
+                        requireAttachmentOfSameGateway(region, routeTable, attachmentId);
+                route.setState("active");
+                route.setTransitGatewayAttachmentId(attachmentId);
+                route.setResourceId(attachment.getVpcId());
+                route.setResourceType("vpc");
+            }
+            transitGatewayRoutes.put(routeKey(region, routeTableId, destinationCidrBlock), route);
+            return route;
+        }
+    }
+
+    public TransitGatewayRoute deleteTransitGatewayRoute(String region, String routeTableId,
+                                                         String destinationCidrBlock) {
+        synchronized (attachmentTopologyLock(region)) {
+            getRequiredTransitGatewayRouteTable(region, routeTableId);
+            TransitGatewayRoute route = transitGatewayRoutes
+                    .get(routeKey(region, routeTableId, destinationCidrBlock))
+                    .orElseThrow(() -> new AwsException("InvalidRoute.NotFound", "The route "
+                            + destinationCidrBlock + " does not exist in Transit Gateway Route Table "
+                            + routeTableId + ".", 400));
+            transitGatewayRoutes.delete(routeKey(region, routeTableId, destinationCidrBlock));
+            route.setState("deleted");
+            route.setTransitGatewayAttachmentId(null);
+            route.setResourceId(null);
+            route.setResourceType(null);
+            return route;
+        }
+    }
+
+    /**
+     * The static routes written into a table, plus the propagated ones, which are a view of the
+     * enabled propagations joined to the attached VPC's CIDRs rather than records of their own.
+     * Deriving them keeps a VPC's CIDR changes from leaving a stale route behind.
+     */
+    public List<TransitGatewayRoute> searchTransitGatewayRoutes(String region, String routeTableId,
+                                                                Map<String, List<String>> filters) {
+        getRequiredTransitGatewayRouteTable(region, routeTableId);
+        List<TransitGatewayRoute> routes = new ArrayList<>(routesOf(region, routeTableId));
+        for (TransitGatewayRouteTablePropagation propagation : propagationsOf(region, routeTableId)) {
+            TransitGatewayVpcAttachment attachment = transitGatewayVpcAttachments
+                    .get(key(region, propagation.getTransitGatewayAttachmentId())).orElse(null);
+            if (attachment == null) {
+                continue;
+            }
+            Vpc vpc = vpcs.get(key(region, attachment.getVpcId())).orElse(null);
+            if (vpc == null) {
+                continue;
+            }
+            for (String cidr : vpcCidrBlocks(vpc)) {
+                TransitGatewayRoute route = new TransitGatewayRoute();
+                route.setTransitGatewayRouteTableId(routeTableId);
+                route.setDestinationCidrBlock(cidr);
+                route.setTransitGatewayAttachmentId(attachment.getTransitGatewayAttachmentId());
+                route.setResourceId(attachment.getVpcId());
+                route.setResourceType("vpc");
+                route.setType("propagated");
+                route.setState("active");
+                route.setRegion(region);
+                routes.add(route);
+            }
+        }
+        return applyRouteFilters(routes, filters);
+    }
+
+    /**
+     * The route search filters, as the live API applies them. The three CIDR relationship filters
+     * differ in the value they take, which is not something the reference spells out:
+     * {@code supernet-of-match} and {@code subnet-of-match} take a CIDR and match inclusively in
+     * either direction, while {@code longest-prefix-match} takes a bare address and returns the one
+     * most specific route covering it. Handing either the other's value form returns nothing on
+     * AWS, so the same holds here.
+     *
+     * <p>A filter name the API does not know is rejected rather than ignored: accepting it would
+     * answer a question that was never asked.
+     */
+    private List<TransitGatewayRoute> applyRouteFilters(List<TransitGatewayRoute> routes,
+                                                        Map<String, List<String>> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return routes;
+        }
+        List<TransitGatewayRoute> matched = new ArrayList<>(routes);
+        for (Map.Entry<String, List<String>> filter : filters.entrySet()) {
+            String name = filter.getKey();
+            List<String> values = filter.getValue();
+            switch (name) {
+                case "type" -> matched.removeIf(route -> !matchesValue(values, route.getType()));
+                case "state" -> matched.removeIf(route -> !matchesValue(values, route.getState()));
+                case "route-search.exact-match" ->
+                        matched.removeIf(route -> !matchesValue(values, route.getDestinationCidrBlock()));
+                case "attachment.transit-gateway-attachment-id" ->
+                        matched.removeIf(route -> !matchesValue(values, route.getTransitGatewayAttachmentId()));
+                case "attachment.resource-id" ->
+                        matched.removeIf(route -> !matchesValue(values, route.getResourceId()));
+                case "attachment.resource-type" ->
+                        matched.removeIf(route -> !matchesValue(values, route.getResourceType()));
+                case "route-search.supernet-of-match" -> matched.removeIf(route -> values.stream()
+                        .noneMatch(value -> cidrContains(route.getDestinationCidrBlock(), value)));
+                case "route-search.subnet-of-match" -> matched.removeIf(route -> values.stream()
+                        .noneMatch(value -> cidrContains(value, route.getDestinationCidrBlock())));
+                case "route-search.longest-prefix-match" -> {
+                    List<TransitGatewayRoute> longest = new ArrayList<>();
+                    for (String address : values) {
+                        matched.stream()
+                                .filter(route -> cidrContainsAddress(route.getDestinationCidrBlock(), address))
+                                .max(Comparator.comparingInt(route ->
+                                        prefixLengthOf(route.getDestinationCidrBlock())))
+                                .ifPresent(longest::add);
+                    }
+                    matched.retainAll(longest);
+                }
+                default -> throw new AwsException("InvalidParameterValue",
+                        "Value (" + name + ") for parameter Filter is invalid. ", 400);
+            }
+        }
+        return matched;
+    }
+
+    /** Whether {@code outer} covers {@code inner}, both CIDRs, an equal pair counting as covered. */
+    private boolean cidrContains(String outer, String inner) {
+        int[] outerRange = cidrRange(outer);
+        int[] innerRange = cidrRange(inner);
+        if (outerRange == null || innerRange == null) {
+            return false;
+        }
+        return outerRange[1] <= innerRange[1]
+                && (innerRange[0] & maskOf(outerRange[1])) == outerRange[0];
+    }
+
+    /** Whether a CIDR covers a bare address, which is the form longest-prefix-match takes. */
+    private boolean cidrContainsAddress(String cidr, String address) {
+        if (address == null || address.contains("/")) {
+            return false;
+        }
+        int[] range = cidrRange(cidr);
+        Integer packed = packIpv4(address);
+        if (range == null || packed == null) {
+            return false;
+        }
+        return (packed & maskOf(range[1])) == range[0];
+    }
+
+    private int prefixLengthOf(String cidr) {
+        int[] range = cidrRange(cidr);
+        return range == null ? -1 : range[1];
+    }
+
+    /** The network address and prefix length of an IPv4 CIDR, or null when it is neither. */
+    private int[] cidrRange(String cidr) {
+        if (cidr == null) {
+            return null;
+        }
+        int slash = cidr.indexOf('/');
+        if (slash < 0) {
+            return null;
+        }
+        Integer packed = packIpv4(cidr.substring(0, slash));
+        if (packed == null) {
+            return null;
+        }
+        int prefix;
+        try {
+            prefix = Integer.parseInt(cidr.substring(slash + 1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (prefix < 0 || prefix > 32) {
+            return null;
+        }
+        return new int[] {packed & maskOf(prefix), prefix};
+    }
+
+    private int maskOf(int prefixLength) {
+        return prefixLength == 0 ? 0 : (int) (-1L << (32 - prefixLength));
+    }
+
+    private Integer packIpv4(String address) {
+        String[] octets = address.split("\\.");
+        if (octets.length != 4) {
+            return null;
+        }
+        int packed = 0;
+        for (String octet : octets) {
+            int value;
+            try {
+                value = Integer.parseInt(octet);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            if (value < 0 || value > 255) {
+                return null;
+            }
+            packed = (packed << 8) | value;
+        }
+        return packed;
+    }
+
+    private List<String> vpcCidrBlocks(Vpc vpc) {
+        List<String> blocks = new ArrayList<>();
+        if (vpc.getCidrBlock() != null) {
+            blocks.add(vpc.getCidrBlock());
+        }
+        vpc.getCidrBlockAssociationSet().stream()
+                .map(VpcCidrBlockAssociation::getCidrBlock)
+                .filter(cidr -> cidr != null && !blocks.contains(cidr))
+                .forEach(blocks::add);
+        return blocks;
+    }
+
+    private List<TransitGatewayRoute> routesOf(String region, String routeTableId) {
+        return transitGatewayRoutes.scan(k -> true).stream()
+                .filter(route -> region.equals(route.getRegion()))
+                .filter(route -> routeTableId.equals(route.getTransitGatewayRouteTableId()))
+                .collect(Collectors.toList());
+    }
+
+    private String propagationKey(String region, String routeTableId, String attachmentId) {
+        return key(region, routeTableId + "::" + attachmentId);
+    }
+
+    private String routeKey(String region, String routeTableId, String destinationCidrBlock) {
+        return key(region, routeTableId + "::" + destinationCidrBlock);
+    }
+
+    private TransitGatewayRouteTable getRequiredTransitGatewayRouteTable(String region, String routeTableId) {
+        if (routeTableId == null || routeTableId.isBlank()) {
+            throw new AwsException("MissingParameter",
+                    "The request must contain the parameter TransitGatewayRouteTableId.", 400);
+        }
+        requireWellFormedRouteTableId(routeTableId);
+        return transitGatewayRouteTables.get(key(region, routeTableId))
+                .filter(routeTable -> region.equals(routeTable.getRegion()))
+                .orElseThrow(() -> new AwsException("InvalidRouteTableID.NotFound",
+                        "Transit Gateway Route Table " + routeTableId + " was deleted or does not exist.", 400));
+    }
+
+    /**
+     * Verified live, including the casing: the not-found code spells it {@code InvalidRouteTableID}
+     * and the malformed one {@code InvalidRouteTableId}.
+     */
+    private static void requireWellFormedRouteTableId(String routeTableId) {
+        if (!TRANSIT_GATEWAY_ROUTE_TABLE_ID_PATTERN.matcher(routeTableId).matches()) {
+            throw new AwsException("InvalidRouteTableId.Malformed",
+                    "Invalid Transit Gateway Route Table id " + routeTableId + ".", 400);
         }
     }
 
