@@ -2528,6 +2528,108 @@ public class Ec2Service implements ContainerTeardown {
         }
     }
 
+    /**
+     * Deletes a rule by its {@code sgr-} id, which is what a standalone
+     * {@code AWS::EC2::SecurityGroupIngress} or {@code Egress} resource holds as its physical id.
+     * Returns false when the rule is already gone, so a stack delete stays idempotent.
+     */
+    public boolean deleteSecurityGroupRule(String region, String securityGroupRuleId) {
+        ensureDefaultResources(region);
+        SecurityGroupRule rule = securityGroupRules.get(key(region, securityGroupRuleId)).orElse(null);
+        if (rule == null) {
+            return false;
+        }
+        securityGroupRules.delete(key(region, securityGroupRuleId));
+        String groupId = rule.getGroupId();
+        if (groupId == null) {
+            return true;
+        }
+        synchronized (lockFor(key(region, groupId))) {
+            SecurityGroup sg = securityGroups.get(key(region, groupId)).orElse(null);
+            if (sg == null) {
+                return true;
+            }
+            List<IpPermission> next = new ArrayList<>(rule.isEgress()
+                    ? sg.getIpPermissionsEgress() : sg.getIpPermissions());
+            if (removeRecordedPermission(next, rule)) {
+                if (rule.isEgress()) {
+                    sg.setIpPermissionsEgress(next);
+                } else {
+                    sg.setIpPermissions(next);
+                }
+                securityGroups.put(key(region, groupId), sg);
+            }
+        }
+        if (!rule.isEgress()) {
+            reconcilePublishedPortsForGroup(region, groupId);
+        }
+        return true;
+    }
+
+    /**
+     * Drops exactly the peer a rule record names, its ipv4 cidr, ipv6 cidr or referenced group, and
+     * the whole permission only once nothing is left in it. Matching on protocol and ports alone
+     * would take out an unrelated rule that happens to share them.
+     */
+    private boolean removeRecordedPermission(List<IpPermission> perms, SecurityGroupRule rule) {
+        String referencedGroupId = rule.getReferencedGroupInfo() == null
+                ? null : rule.getReferencedGroupInfo().getGroupId();
+        for (IpPermission perm : perms) {
+            if (!Objects.equals(perm.getIpProtocol(), rule.getIpProtocol())
+                    || !Objects.equals(perm.getFromPort(), rule.getFromPort())
+                    || !Objects.equals(perm.getToPort(), rule.getToPort())) {
+                continue;
+            }
+            if (rule.getCidrIpv6() != null) {
+                Ipv6Range match6 = perm.getIpv6Ranges().stream()
+                        .filter(r -> rule.getCidrIpv6().equals(r.getCidrIpv6()))
+                        .findFirst().orElse(null);
+                if (match6 == null) {
+                    continue;
+                }
+                perm.getIpv6Ranges().remove(match6);
+                dropIfEmpty(perms, perm);
+                return true;
+            }
+            if (referencedGroupId != null) {
+                UserIdGroupPair matchPair = perm.getUserIdGroupPairs().stream()
+                        .filter(pair -> referencedGroupId.equals(pair.getGroupId()))
+                        .findFirst().orElse(null);
+                if (matchPair == null) {
+                    continue;
+                }
+                perm.getUserIdGroupPairs().remove(matchPair);
+                dropIfEmpty(perms, perm);
+                return true;
+            }
+            if (rule.getCidrIpv4() != null) {
+                IpRange match = perm.getIpRanges().stream()
+                        .filter(r -> rule.getCidrIpv4().equals(r.getCidrIp()))
+                        .findFirst().orElse(null);
+                if (match == null) {
+                    continue;
+                }
+                perm.getIpRanges().remove(match);
+                dropIfEmpty(perms, perm);
+                return true;
+            }
+            // A record naming no peer matches only a permission that names none either.
+            if (perm.getIpRanges().isEmpty() && perm.getIpv6Ranges().isEmpty()
+                    && perm.getUserIdGroupPairs().isEmpty()) {
+                perms.remove(perm);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void dropIfEmpty(List<IpPermission> perms, IpPermission perm) {
+        if (perm.getIpRanges().isEmpty() && perm.getIpv6Ranges().isEmpty()
+                && perm.getUserIdGroupPairs().isEmpty()) {
+            perms.remove(perm);
+        }
+    }
+
     private SecurityGroup getRequiredSecurityGroup(String region, String groupId) {
         SecurityGroup sg = securityGroups.get(key(region, groupId)).orElse(null);
         if (sg == null)
