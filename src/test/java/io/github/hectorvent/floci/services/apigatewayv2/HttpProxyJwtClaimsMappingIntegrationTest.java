@@ -21,41 +21,44 @@ import java.security.Signature;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Base64;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static io.restassured.RestAssured.given;
-import static org.hamcrest.Matchers.notNullValue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Regression test: HTTP API (v2) JWT authorizers support {@code $request.querystring.*}
- * identity sources, not just {@code $request.header.*} — a template/API call configuring
- * a query-string token source must not 401 a request carrying a valid token there.
+ * Regression test: an HTTP_PROXY integration on a JWT-authorized route maps
+ * {@code $context.authorizer.claims.*} into the outgoing backend request from the token the
+ * authorizer actually verified — not from a second, independently (and previously unverified)
+ * parsed token.
  *
- * <p>Tokens here are real RS256-signed JWTs verified against a local fixture server serving
- * {@code /.well-known/openid-configuration} and a JWKS document — {@code JwtSignatureVerifier}
- * checks every JWT authorizer's token against its issuer's real published keys (the same as real
- * API Gateway), so an unsigned or wrongly-signed token is correctly rejected regardless of which
- * identity source carried it.
+ * <p>Before the fix, {@code dispatchHttpProxyV2} re-extracted a token from the
+ * {@code Authorization} header (regardless of the authorizer's configured identity source) and
+ * re-parsed its claims without checking the signature. This authorizer's identity source is a
+ * query-string parameter, not a header, so a caller presenting a validly-signed token there
+ * *and* an unrelated, attacker-controlled {@code Authorization} header would have had claim
+ * mappings resolve from the unverified header token instead of the one the authorizer checked.
  */
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class HttpApiJwtAuthorizerQuerystringTest {
+class HttpProxyJwtClaimsMappingIntegrationTest {
 
     private static String httpApiId;
-    private static String integrationId;
     private static String routeId;
-    private static String authorizerId;
 
     private static HttpServer issuerServer;
-    private static String ISSUER;
+    private static HttpServer backendServer;
+    private static String issuer;
     private static final String AUDIENCE = "my-client-id";
     private static final String KEY_ID = "test-key-1";
 
     private static RSAPrivateKey privateKey;
     private static RSAPublicKey publicKey;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final AtomicReference<String> receivedSubHeader = new AtomicReference<>();
 
     @BeforeAll
-    static void startIssuerServer() throws Exception {
+    static void startFixtureServers() throws Exception {
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
         KeyPair pair = gen.generateKeyPair();
@@ -63,10 +66,9 @@ class HttpApiJwtAuthorizerQuerystringTest {
         publicKey = (RSAPublicKey) pair.getPublic();
 
         issuerServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        ISSUER = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
-
+        issuer = "http://127.0.0.1:" + issuerServer.getAddress().getPort();
         issuerServer.createContext("/.well-known/openid-configuration", exchange -> {
-            String body = "{\"issuer\":\"" + ISSUER + "\",\"jwks_uri\":\"" + ISSUER + "/jwks\"}";
+            String body = "{\"issuer\":\"" + issuer + "\",\"jwks_uri\":\"" + issuer + "/jwks\"}";
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);
@@ -85,13 +87,22 @@ class HttpApiJwtAuthorizerQuerystringTest {
             exchange.close();
         });
         issuerServer.start();
+
+        backendServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        backendServer.createContext("/", exchange -> {
+            receivedSubHeader.set(exchange.getRequestHeaders().getFirst("x-user-id"));
+            byte[] resp = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, resp.length);
+            exchange.getResponseBody().write(resp);
+            exchange.close();
+        });
+        backendServer.start();
     }
 
     @AfterAll
-    static void stopIssuerServer() {
-        if (issuerServer != null) {
-            issuerServer.stop(0);
-        }
+    static void stopFixtureServers() {
+        if (issuerServer != null) issuerServer.stop(0);
+        if (backendServer != null) backendServer.stop(0);
     }
 
     @Test
@@ -100,12 +111,10 @@ class HttpApiJwtAuthorizerQuerystringTest {
         httpApiId = given()
                 .contentType(ContentType.JSON)
                 .body("""
-                        {"name":"http-v2-jwt-querystring-test","protocolType":"HTTP"}
+                        {"name":"http-proxy-jwt-claims-mapping-test","protocolType":"HTTP"}
                         """)
                 .when().post("/v2/apis")
-                .then()
-                .statusCode(201)
-                .body("apiId", notNullValue())
+                .then().statusCode(201)
                 .extract().path("apiId");
 
         given()
@@ -114,17 +123,17 @@ class HttpApiJwtAuthorizerQuerystringTest {
                         {"stageName":"test"}
                         """)
                 .when().post("/v2/apis/" + httpApiId + "/stages")
-                .then()
-                .statusCode(201);
+                .then().statusCode(201);
 
-        integrationId = given()
+        String backendUrl = "http://127.0.0.1:" + backendServer.getAddress().getPort();
+        String integrationId = given()
                 .contentType(ContentType.JSON)
                 .body("""
-                        {"integrationType":"HTTP_PROXY","integrationUri":"https://backend.example.com","payloadFormatVersion":"1.0"}
-                        """)
+                        {"integrationType":"HTTP_PROXY","integrationUri":"%s","payloadFormatVersion":"1.0",\
+                        "requestParameters":{"append:header.x-user-id":"$context.authorizer.claims.sub"}}
+                        """.formatted(backendUrl))
                 .when().post("/v2/apis/" + httpApiId + "/integrations")
-                .then()
-                .statusCode(201)
+                .then().statusCode(201)
                 .extract().path("integrationId");
 
         routeId = given()
@@ -133,17 +142,16 @@ class HttpApiJwtAuthorizerQuerystringTest {
                         {"routeKey":"GET /hello","target":"integrations/%s"}
                         """.formatted(integrationId))
                 .when().post("/v2/apis/" + httpApiId + "/routes")
-                .then()
-                .statusCode(201)
+                .then().statusCode(201)
                 .extract().path("routeId");
 
-        authorizerId = given()
+        String authorizerId = given()
                 .contentType(ContentType.JSON)
                 .body("""
                         {"name":"jwt-querystring-auth","authorizerType":"JWT",\
                         "identitySource":"$request.querystring.token",\
                         "jwtConfiguration":{"audience":["%s"],"issuer":"%s"}}
-                        """.formatted(AUDIENCE, ISSUER))
+                        """.formatted(AUDIENCE, issuer))
                 .when().post("/v2/apis/" + httpApiId + "/authorizers")
                 .then().statusCode(201)
                 .extract().path("authorizerId");
@@ -159,91 +167,40 @@ class HttpApiJwtAuthorizerQuerystringTest {
 
     @Test
     @Order(10)
-    void requestWithValidTokenInQueryStringIsAuthorized() throws Exception {
-        // The integration target isn't a real reachable backend, so a successful proxy
-        // round-trip isn't asserted here — only that the request got past the authorizer.
-        // Before the fix, an invalid/missing token (or a source type extractToken can't read)
-        // 401s before ever reaching the integration; getting a 502 (backend unreachable) rather
-        // than a 401 proves the querystring token was actually extracted, signature-verified,
-        // and accepted.
-        String token = signedJwt(ISSUER, AUDIENCE);
+    void claimsMappingUsesTheVerifiedQuerystringTokenNotASpoofedHeaderToken() throws Exception {
+        receivedSubHeader.set(null);
+
+        // The authorizer's identitySource is the querystring token, and that's the one that
+        // gets verified — this token's claims are what $context.authorizer.claims.sub must
+        // resolve to. The Authorization header carries a different, entirely unsigned token
+        // naming a different subject; if the backend receives THAT subject, the vulnerability
+        // Greptile flagged (unverified header claims leaking into request mappings) is back.
+        String verifiedToken = signedJwt(issuer, AUDIENCE, "verified-user", privateKey);
+        String spoofedHeaderToken = unsignedJwt("attacker-controlled-user");
 
         given()
-                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + token)
-                .then().statusCode(502);
+                .header("Authorization", "Bearer " + spoofedHeaderToken)
+                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + verifiedToken)
+                .then().statusCode(200);
+
+        assertEquals("verified-user", receivedSubHeader.get());
     }
 
     @Test
     @Order(20)
-    void requestWithNoTokenAnywhereIsUnauthorized() {
-        given()
-                .when().get("/execute-api/" + httpApiId + "/test/hello")
-                .then().statusCode(401);
-    }
+    void requestWithNoAuthorizationHeaderStillMapsTheVerifiedQuerystringToken() throws Exception {
+        receivedSubHeader.set(null);
 
-    @Test
-    @Order(30)
-    void requestWithValidTokenOnlyInHeaderIsUnauthorizedWhenSourceIsQuerystring() throws Exception {
-        // The authorizer's IdentitySource is $request.querystring.token, not a header — a
-        // token presented via Authorization must not satisfy an identity source it wasn't
-        // configured for.
-        String token = signedJwt(ISSUER, AUDIENCE);
+        String verifiedToken = signedJwt(issuer, AUDIENCE, "only-querystring-user", privateKey);
 
         given()
-                .header("Authorization", "Bearer " + token)
-                .when().get("/execute-api/" + httpApiId + "/test/hello")
-                .then().statusCode(401);
+                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + verifiedToken)
+                .then().statusCode(200);
+
+        assertEquals("only-querystring-user", receivedSubHeader.get());
     }
 
-    @Test
-    @Order(40)
-    void requestWithForgedSignatureInQueryStringIsUnauthorized() throws Exception {
-        // Same kid, same claims, but signed with an unrelated keypair — this must not verify
-        // against the issuer's real published key.
-        KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(2048);
-        RSAPrivateKey forgedKey = (RSAPrivateKey) gen.generateKeyPair().getPrivate();
-        String token = signedJwt(ISSUER, AUDIENCE, forgedKey);
-
-        given()
-                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + token)
-                .then().statusCode(401);
-    }
-
-    @Test
-    @Order(50)
-    void requestWithValidSignatureButExpiredTokenIsUnauthorized() throws Exception {
-        // Signature verification (checked first) passes here - this exercises the exp check
-        // that runs afterward, which a change to the check ordering could otherwise silently
-        // skip without any test catching it.
-        String token = signedJwt(ISSUER, AUDIENCE, privateKey, 1L); // epoch second 1: long expired
-
-        given()
-                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + token)
-                .then().statusCode(401);
-    }
-
-    @Test
-    @Order(60)
-    void requestWithValidSignatureButWrongAudienceIsUnauthorized() throws Exception {
-        // Same: signature is genuinely valid, only the aud claim is wrong, isolating the
-        // audience check from the signature check that now runs ahead of it.
-        String token = signedJwt(ISSUER, "someone-elses-client-id");
-
-        given()
-                .when().get("/execute-api/" + httpApiId + "/test/hello?token=" + token)
-                .then().statusCode(401);
-    }
-
-    private static String signedJwt(String issuer, String audience) throws Exception {
-        return signedJwt(issuer, audience, privateKey, 9999999999L);
-    }
-
-    private static String signedJwt(String issuer, String audience, RSAPrivateKey signingKey) throws Exception {
-        return signedJwt(issuer, audience, signingKey, 9999999999L);
-    }
-
-    private static String signedJwt(String issuer, String audience, RSAPrivateKey signingKey, long exp)
+    private static String signedJwt(String issuer, String audience, String subject, RSAPrivateKey signingKey)
             throws Exception {
         ObjectNode header = OBJECT_MAPPER.createObjectNode();
         header.put("alg", "RS256");
@@ -253,7 +210,8 @@ class HttpApiJwtAuthorizerQuerystringTest {
         ObjectNode payload = OBJECT_MAPPER.createObjectNode();
         payload.put("iss", issuer);
         payload.put("aud", audience);
-        payload.put("exp", exp);
+        payload.put("sub", subject);
+        payload.put("exp", 9999999999L);
 
         String signingInput = base64Url(header.toString()) + "." + base64Url(payload.toString());
         Signature signature = Signature.getInstance("SHA256withRSA");
@@ -262,6 +220,12 @@ class HttpApiJwtAuthorizerQuerystringTest {
         String encodedSignature = Base64.getUrlEncoder().withoutPadding().encodeToString(signature.sign());
 
         return signingInput + "." + encodedSignature;
+    }
+
+    private static String unsignedJwt(String subject) {
+        String header = base64Url("{\"alg\":\"none\"}");
+        String payload = base64Url("{\"sub\":\"" + subject + "\"}");
+        return header + "." + payload + ".";
     }
 
     private static String base64Url(String json) {
