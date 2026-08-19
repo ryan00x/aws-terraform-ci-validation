@@ -26,6 +26,7 @@ import io.github.hectorvent.floci.services.ec2.model.NetworkInterface;
 import io.github.hectorvent.floci.services.ec2.model.Reservation;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroup;
 import io.github.hectorvent.floci.services.ec2.model.Snapshot;
+import io.github.hectorvent.floci.services.ec2.model.Subnet;
 import io.github.hectorvent.floci.services.ec2.model.Tag;
 import io.github.hectorvent.floci.services.ec2.model.TransitGateway;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayOptions;
@@ -34,7 +35,7 @@ import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRouteTable;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayRouteTablePropagation;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachment;
 import io.github.hectorvent.floci.services.ec2.model.TransitGatewayVpcAttachmentOptions;
-import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
+import io.github.hectorvent.floci.services.ec2.model.Vpc;
 import io.github.hectorvent.floci.services.ec2.model.VpcEndpoint;
 import io.github.hectorvent.floci.services.ec2.model.Volume;
 import io.github.hectorvent.floci.services.ec2.model.VolumeAttachment;
@@ -243,17 +244,118 @@ class Ec2ServiceTest {
     }
 
     @Test
+    void defaultVpcSubnetAndSecurityGroupIdsAreRegionScoped() {
+        // #21: the default VPC/subnets/security group were literal ids ("vpc-default",
+        // "subnet-default-a/b/c", "sg-default") reused as-is in every region. Storage was
+        // already correctly keyed by region, so nothing actually collided server-side, but every
+        // region's DescribeVpcs/DescribeSubnets/DescribeSecurityGroups echoed identical ids back
+        // to the caller, making the two regions' default resources indistinguishable from an SDK
+        // or CLI client's point of view.
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+
+        Vpc usEastVpc = service.describeVpcs("us-east-1", List.of(), Map.of()).getFirst();
+        Vpc euWestVpc = service.describeVpcs("eu-west-1", List.of(), Map.of()).getFirst();
+
+        assertNotEquals(usEastVpc.getVpcId(), euWestVpc.getVpcId(),
+                "default VPC id must differ per region");
+        assertEquals(Ec2Service.defaultVpcId("us-east-1"), usEastVpc.getVpcId());
+        assertEquals(Ec2Service.defaultVpcId("eu-west-1"), euWestVpc.getVpcId());
+
+        List<String> usEastSubnetIds = service.describeSubnets("us-east-1", List.of(), Map.of()).stream()
+                .map(Subnet::getSubnetId).sorted().toList();
+        List<String> euWestSubnetIds = service.describeSubnets("eu-west-1", List.of(), Map.of()).stream()
+                .map(Subnet::getSubnetId).sorted().toList();
+
+        assertTrue(usEastSubnetIds.stream().noneMatch(euWestSubnetIds::contains),
+                "default subnet ids must not collide across regions: " + usEastSubnetIds + " vs " + euWestSubnetIds);
+        assertEquals(List.of(
+                        Ec2Service.defaultSubnetId("us-east-1", "a"),
+                        Ec2Service.defaultSubnetId("us-east-1", "b"),
+                        Ec2Service.defaultSubnetId("us-east-1", "c"))
+                .stream().sorted().toList(),
+                usEastSubnetIds);
+
+        SecurityGroup usEastSg = service.describeSecurityGroups("us-east-1", List.of(), List.of("default"), Map.of())
+                .getFirst();
+        SecurityGroup euWestSg = service.describeSecurityGroups("eu-west-1", List.of(), List.of("default"), Map.of())
+                .getFirst();
+
+        assertNotEquals(usEastSg.getGroupId(), euWestSg.getGroupId(),
+                "default security group id must differ per region");
+        assertEquals(Ec2Service.defaultSecurityGroupId("us-east-1"), usEastSg.getGroupId());
+        assertEquals(Ec2Service.defaultSecurityGroupId("eu-west-1"), euWestSg.getGroupId());
+    }
+
+    @Test
+    void resolveDefaultVpcAndSecurityGroupIdFallBackToPreRegionScopingStorage() throws Exception {
+        // #21 follow-up: persistent storage written before default ids were made region-scoped
+        // still carries the old literal "vpc-default"/"sg-default", never the new scoped form, and
+        // nothing re-seeds it (ensureDefaultResources skips a region that already has a VPC on
+        // file). Any lookup that blindly computed the new scoped id instead of resolving against
+        // what's actually stored would silently stop finding the region's real default VPC/SG.
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+
+        Vpc legacyVpc = new Vpc();
+        legacyVpc.setVpcId("vpc-default");
+        legacyVpc.setCidrBlock("172.31.0.0/16");
+        legacyVpc.setState("available");
+        legacyVpc.setDefault(true);
+        legacyVpc.setOwnerId("000000000000");
+        legacyVpc.setRegion("us-east-1");
+        putViaReflection(service, "vpcs", "us-east-1::vpc-default", legacyVpc);
+
+        SecurityGroup legacySg = new SecurityGroup();
+        legacySg.setGroupId("sg-default");
+        legacySg.setGroupName("default");
+        legacySg.setDescription("default VPC security group");
+        legacySg.setVpcId("vpc-default");
+        legacySg.setOwnerId("000000000000");
+        legacySg.setRegion("us-east-1");
+        putViaReflection(service, "securityGroups", "us-east-1::sg-default", legacySg);
+
+        assertEquals("vpc-default", service.resolveDefaultVpcId("us-east-1"),
+                "must resolve the pre-existing unscoped default VPC, not compute a fresh scoped id");
+        assertEquals("sg-default", service.resolveDefaultSecurityGroupId("us-east-1"),
+                "must resolve the pre-existing unscoped default security group, not compute a fresh scoped id");
+
+        SecurityGroup created = service.createSecurityGroup("us-east-1", "app", "app sg", null);
+        assertEquals("vpc-default", created.getVpcId(),
+                "a new security group with no explicit VpcId must attach to the real default VPC on file");
+
+        // A genuinely fresh region has neither format on file, so both resolvers fall back to the
+        // scoped form ensureDefaultResources would seed.
+        assertEquals(Ec2Service.defaultVpcId("eu-west-1"), service.resolveDefaultVpcId("eu-west-1"));
+        assertEquals(Ec2Service.defaultSecurityGroupId("eu-west-1"),
+                service.resolveDefaultSecurityGroupId("eu-west-1"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> void putViaReflection(Ec2Service service, String fieldName, String key, T value)
+            throws Exception {
+        var field = Ec2Service.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        var backend = (io.github.hectorvent.floci.core.storage.StorageBackend<String, T>) field.get(service);
+        backend.put(key, value);
+    }
+
+    @Test
     void endpointNetworkInterfacesSynthesizesStableEnisForInterfaceEndpoints() {
         Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
                 mock(Ec2PortForwardManager.class),
                 mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
                 new InMemoryStorageFactory());
         String subnetId = service.describeSubnets("us-east-1", List.of(),
-                Map.of("vpc-id", List.of("vpc-default"))).getFirst().getSubnetId();
-        VpcEndpoint endpoint = service.createVpcEndpoint("us-east-1", "vpc-default",
+                Map.of("vpc-id", List.of(Ec2Service.defaultVpcId("us-east-1")))).getFirst().getSubnetId();
+        VpcEndpoint endpoint = service.createVpcEndpoint("us-east-1", Ec2Service.defaultVpcId("us-east-1"),
                 "com.amazonaws.us-east-1.s3", "Interface",
                 List.of(), List.of(subnetId), List.of(), null, List.of());
-        service.createVpcEndpoint("us-east-1", "vpc-default",
+        service.createVpcEndpoint("us-east-1", Ec2Service.defaultVpcId("us-east-1"),
                 "com.amazonaws.us-east-1.dynamodb", "Gateway",
                 List.of(), List.of(), List.of(), null, List.of());
 
@@ -262,7 +364,7 @@ class Ec2ServiceTest {
         assertEquals(1, enis.size(), "only Interface endpoints have ENIs");
         NetworkInterface eni = enis.getFirst();
         assertEquals(subnetId, eni.getSubnetId());
-        assertEquals("vpc-default", eni.getVpcId());
+        assertEquals(Ec2Service.defaultVpcId("us-east-1"), eni.getVpcId());
         assertEquals("VPC Endpoint Interface " + endpoint.getVpcEndpointId(), eni.getDescription());
         assertTrue(eni.getNetworkInterfaceId().startsWith("eni-"));
 
@@ -280,7 +382,7 @@ class Ec2ServiceTest {
                 mock(Ec2PortForwardManager.class),
                 mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
                 new InMemoryStorageFactory());
-        SecurityGroup web = service.createSecurityGroup("us-east-1", "web", "web sg", "vpc-default");
+        SecurityGroup web = service.createSecurityGroup("us-east-1", "web", "web sg", Ec2Service.defaultVpcId("us-east-1"));
         Reservation reservation = service.runInstances("us-east-1", "ami-1234567890abcdef0", "t3.micro",
                 1, 1, null, List.of(), null, null, List.of(), null, null);
         String instanceId = reservation.getInstances().getFirst().getInstanceId();
