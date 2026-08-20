@@ -6450,6 +6450,7 @@ public class CloudFormationResourceProvisioner {
         if (node != null && !node.isMissingNode() && !node.isNull()) {
             dcb.setTargetOriginId(cfnText(node, "TargetOriginId", engine));
             dcb.setViewerProtocolPolicy(cfnTextOrDefault(node, "ViewerProtocolPolicy", engine, "allow-all"));
+            dcb.setResponseHeadersPolicyId(cfnText(node, "ResponseHeadersPolicyId", engine));
             List<String> trustedKeyGroups = cfnStringList(node.path("TrustedKeyGroups"), engine);
             if (!trustedKeyGroups.isEmpty()) {
                 dcb.setTrustedKeyGroups(trustedKeyGroups);
@@ -6467,6 +6468,7 @@ public class CloudFormationResourceProvisioner {
                 cb.setPathPattern(cfnText(node, "PathPattern", engine));
                 cb.setTargetOriginId(cfnText(node, "TargetOriginId", engine));
                 cb.setViewerProtocolPolicy(cfnTextOrDefault(node, "ViewerProtocolPolicy", engine, "allow-all"));
+                cb.setResponseHeadersPolicyId(cfnText(node, "ResponseHeadersPolicyId", engine));
                 List<String> trustedKeyGroups = cfnStringList(node.path("TrustedKeyGroups"), engine);
                 if (!trustedKeyGroups.isEmpty()) {
                     cb.setTrustedKeyGroups(trustedKeyGroups);
