@@ -137,6 +137,9 @@ public class RdsQueryHandler {
         Map<String, String> tags = parseTags(params);
         String availabilityZone = params.getFirst("AvailabilityZone");
         boolean multiAz = "true".equalsIgnoreCase(params.getFirst("MultiAZ"));
+        // AWS defaults this to true when the request omits it - unlike most boolean flags here,
+        // which default to false.
+        boolean autoMinorVersionUpgrade = !"false".equalsIgnoreCase(params.getFirst("AutoMinorVersionUpgrade"));
 
         if (dbInstanceClass == null) {
             dbInstanceClass = "db.t3.micro";
@@ -151,7 +154,7 @@ public class RdsQueryHandler {
                     masterPassword, dbName, dbInstanceClass, allocatedStorage, iamEnabled,
                     paramGroupName, dbSubnetGroupName, dbClusterIdentifier, availabilityZone, multiAz,
                     manageMasterUserPassword, masterUserSecretKmsKeyId, tags, vpcSecurityGroupIds,
-                    optionGroupName, region);
+                    optionGroupName, region, autoMinorVersionUpgrade);
             String result = dbInstanceXml(instance);
             return Response.ok(AwsQueryResponse.envelope("CreateDBInstance", AwsNamespaces.RDS, result)).build();
         } catch (AwsException e) {
@@ -221,11 +224,14 @@ public class RdsQueryHandler {
         Boolean iamEnabled = iamStr != null ? Boolean.parseBoolean(iamStr) : null;
         String dbSubnetGroupName = params.getFirst("DBSubnetGroupName");
         String optionGroupName = params.getFirst("OptionGroupName");
+        String autoMinorVersionUpgradeStr = params.getFirst("AutoMinorVersionUpgrade");
+        Boolean autoMinorVersionUpgrade = autoMinorVersionUpgradeStr != null
+                ? Boolean.parseBoolean(autoMinorVersionUpgradeStr) : null;
         try {
             List<String> vpcSecurityGroupIds = vpcSecurityGroupIds(params);
             DbInstance instance = service.modifyDbInstance(
                     id, newPassword, iamEnabled, dbSubnetGroupName,
-                    vpcSecurityGroupIds, optionGroupName, region);
+                    vpcSecurityGroupIds, optionGroupName, region, autoMinorVersionUpgrade);
             String result = dbInstanceXml(instance);
             return Response.ok(AwsQueryResponse.envelope("ModifyDBInstance", AwsNamespaces.RDS, result)).build();
         } catch (AwsException e) {
@@ -1179,6 +1185,7 @@ public class RdsQueryHandler {
         }
         xml.elem("IAMDatabaseAuthenticationEnabled", i.isIamDatabaseAuthenticationEnabled())
            .elem("MultiAZ", i.isMultiAz())
+           .elem("AutoMinorVersionUpgrade", i.isAutoMinorVersionUpgrade())
            .elem("StorageType", "gp2")
            .elem("PubliclyAccessible", false)
            .elem("AvailabilityZone", i.getAvailabilityZone() != null ? i.getAvailabilityZone() : config.defaultAvailabilityZone())
