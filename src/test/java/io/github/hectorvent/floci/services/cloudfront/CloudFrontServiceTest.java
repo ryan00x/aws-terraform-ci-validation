@@ -532,6 +532,49 @@ class CloudFrontServiceTest {
     }
 
     @Test
+    void rejectsInvalidOriginCustomHeaderNamesAndValues() {
+        CloudFrontService service = serviceWithDomainSuffix("cloudfront.net");
+        List<List<Map<String, String>>> invalidHeaders = List.of(
+                List.of(header("X-Duplicate", "one"), header("x-duplicate", "two")),
+                List.of(header("X-Amz-Reserved", "value")),
+                List.of(header("X-Edge-Reserved", "value")),
+                List.of(header("Bad Header", "value")),
+                List.of(header("", "value")),
+                List.of(header("X-Missing-Value", null)),
+                List.of(header("X-Injected", "value\r\nInjected: true")),
+                List.of(header("X".repeat(257), "value")),
+                List.of(header("X-Too-Long", "v".repeat(1_784))),
+                List.of(
+                        header("X-Quota-1", "v".repeat(1_783)),
+                        header("X-Quota-2", "v".repeat(1_783)),
+                        header("X-Quota-3", "v".repeat(1_783)),
+                        header("X-Quota-4", "v".repeat(1_783)),
+                        header("X-Quota-5", "v".repeat(1_783)),
+                        header("X-Quota-6", "v".repeat(1_783))));
+
+        for (int i = 0; i < invalidHeaders.size(); i++) {
+            Distribution candidate = distribution(false, List.of());
+            Origin origin = new Origin();
+            origin.setCustomHeaders(invalidHeaders.get(i));
+            candidate.getConfig().setOrigins(List.of(origin));
+
+            AwsException error = assertThrows(
+                    AwsException.class,
+                    () -> service.createDistribution(candidate, Map.of()),
+                    "validation case " + i);
+            assertEquals("InvalidArgument", error.getErrorCode(), "validation case " + i);
+            assertEquals(400, error.getHttpStatus(), "validation case " + i);
+        }
+    }
+
+    private static Map<String, String> header(String name, String value) {
+        Map<String, String> header = new LinkedHashMap<>();
+        header.put("HeaderName", name);
+        header.put("HeaderValue", value);
+        return header;
+    }
+
+    @Test
     void exposesCanonicalManagedResponseHeadersPolicies() {
         CloudFrontService service = serviceWithDomainSuffix("cloudfront.net");
 
@@ -704,6 +747,7 @@ class CloudFrontServiceTest {
         assertEquals(code, error.getErrorCode());
         return error;
     }
+
     private static Distribution distribution(boolean enabled, List<String> aliases) {
         DistributionConfig config = new DistributionConfig();
         config.setEnabled(enabled);
