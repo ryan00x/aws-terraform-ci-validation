@@ -2032,6 +2032,10 @@ public class CloudFormationResourceProvisioner {
                 : (props != null ? props.get("S3DestinationConfiguration") : null);
         if (s3Node != null && !s3Node.isNull()) {
             s3 = new DeliveryStreamDescription.S3Destination();
+
+            s3.setCompressionFormat(
+                blankToNull(engine.resolve(s3Node.path("CompressionFormat")))
+            );
             s3.setBucketArn(blankToNull(engine.resolve(s3Node.path("BucketARN"))));
             s3.setPrefix(blankToNull(engine.resolve(s3Node.path("Prefix"))));
             if (s3Node.has("BufferingHints")) {
