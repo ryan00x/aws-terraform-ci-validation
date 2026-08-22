@@ -412,21 +412,7 @@ class DynamoDbServiceTest {
     @Test
     void queryOnCompositeSortKeyGsiRespectsScanIndexForward() {
         String region = "us-east-1";
-        GlobalSecondaryIndex gsi = new GlobalSecondaryIndex(
-                "memberIndex",
-                List.of(
-                        new KeySchemaElement("memberName", "HASH"),
-                        new KeySchemaElement("state", "RANGE"),
-                        new KeySchemaElement("createdAt", "RANGE")),
-                null, "ALL", null);
-        service.createTable("Requests",
-                List.of(new KeySchemaElement("requestId", "HASH")),
-                List.of(
-                        new AttributeDefinition("requestId", "S"),
-                        new AttributeDefinition("memberName", "S"),
-                        new AttributeDefinition("state", "S"),
-                        new AttributeDefinition("createdAt", "S")),
-                5L, 5L, List.of(gsi), region);
+        createRequestsTableWithCompositeSortKeyGsi(region);
 
         // Same memberName + state. Deliberately make base-table key order (requestId: a, b, c)
         // DISAGREE with createdAt order, so a correct result can only come from sorting on the
@@ -460,6 +446,44 @@ class DynamoDbServiceTest {
                 descending.items().stream()
                         .map(result -> result.get("createdAt").get("S").asText())
                         .toList());
+    }
+
+    @Test
+    void queryOnCompositeSortKeyGsiExcludesItemsMissingTrailingIndexKey() {
+        String region = "us-east-1";
+        createRequestsTableWithCompositeSortKeyGsi(region);
+        service.putItem("Requests", item("requestId", "complete", "memberName", "alice",
+                "state", "ACTIVE", "createdAt", "2026-07-14T00:00:01Z"), region);
+        service.putItem("Requests", item("requestId", "incomplete", "memberName", "alice",
+                "state", "ACTIVE"), region);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":pk", attributeValue("S", "alice"));
+
+        DynamoDbService.QueryResult results = service.query("Requests", null, exprValues,
+                "memberName = :pk", null, null, true, "memberIndex", null, null, region);
+
+        assertEquals(List.of("complete"), results.items().stream()
+                .map(result -> result.get("requestId").get("S").asText())
+                .toList());
+    }
+
+    private void createRequestsTableWithCompositeSortKeyGsi(String region) {
+        GlobalSecondaryIndex gsi = new GlobalSecondaryIndex(
+                "memberIndex",
+                List.of(
+                        new KeySchemaElement("memberName", "HASH"),
+                        new KeySchemaElement("state", "RANGE"),
+                        new KeySchemaElement("createdAt", "RANGE")),
+                null, "ALL", null);
+        service.createTable("Requests",
+                List.of(new KeySchemaElement("requestId", "HASH")),
+                List.of(
+                        new AttributeDefinition("requestId", "S"),
+                        new AttributeDefinition("memberName", "S"),
+                        new AttributeDefinition("state", "S"),
+                        new AttributeDefinition("createdAt", "S")),
+                5L, 5L, List.of(gsi), region);
     }
 
     @Test
@@ -609,6 +633,34 @@ class DynamoDbServiceTest {
         assertThrows(AwsException.class, () -> service.deleteItem("NoTable", item("id", "1"), region));
         assertThrows(AwsException.class, () -> service.query("NoTable", null, null, null, null, null, region));
         assertThrows(AwsException.class, () -> service.scan("NoTable", null, null, null, null, null, null, region));
+    }
+
+    @Test
+    void scanRejectsUnknownIndexOnEmptyTable() {
+        String region = "eu-west-1";
+        createOrdersTable(region);
+
+        AwsException error = assertThrows(AwsException.class, () -> service.scan(
+                "Orders", null, null, null, null, null, null, "missing-index", region));
+
+        assertEquals("ValidationException", error.getErrorCode());
+        assertEquals("The table does not have the specified index: missing-index", error.getMessage());
+    }
+
+    @Test
+    void queryRejectsNonKeyConditionOnEmptyTable() {
+        String region = "eu-west-1";
+        createOrdersTable(region);
+        ObjectNode values = mapper.createObjectNode();
+        values.set(":customer", attributeValue("S", "c1"));
+        values.set(":total", attributeValue("N", "10"));
+
+        AwsException error = assertThrows(AwsException.class, () -> service.query(
+                "Orders", null, values, "customerId = :customer AND total > :total",
+                null, null, null, null, null, null, region));
+
+        assertEquals("ValidationException", error.getErrorCode());
+        assertEquals("Query key condition not supported", error.getMessage());
     }
 
     @Test
