@@ -737,6 +737,7 @@ public class DynamoDbService {
         String partitionKeyValuePlaceholder = DynamoDbAccessPathValidator.validateQuery(
                 accessPath, keyConditions, keyConditionExpression, filterExpression, null, exprAttrNames);
         String pkName = accessPath.partitionKeyName();
+        List<String> pkNames = accessPath.partitionKeyNames();
         String skName = accessPath.sortKeyName();
         List<String> sortKeyNames = accessPath.sortKeyNames();
 
@@ -746,21 +747,17 @@ public class DynamoDbService {
         List<JsonNode> results = new ArrayList<>();
 
         if (keyConditions != null) {
-            // Legacy KeyConditions format
-            JsonNode pkCondition = keyConditions.get(pkName);
-            String pkValue = extractComparisonValue(pkCondition);
-
             for (JsonNode item : items.values()) {
-                if (!item.has(pkName)) continue;
-                if (matchesAttributeValue(item.get(pkName), pkValue)) {
-                    if (skName != null && keyConditions.has(skName)) {
-                        JsonNode skCondition = keyConditions.get(skName);
-                        if (matchesKeyCondition(item.get(skName), skCondition)) {
-                            results.add(item);
-                        }
-                    } else {
+                boolean partitionKeyMatches = pkNames.stream().allMatch(name -> item.has(name)
+                        && matchesAttributeValue(item.get(name), extractComparisonValue(keyConditions.get(name))));
+                if (!partitionKeyMatches) continue;
+                if (skName != null && keyConditions.has(skName)) {
+                    JsonNode skCondition = keyConditions.get(skName);
+                    if (matchesKeyCondition(item.get(skName), skCondition)) {
                         results.add(item);
                     }
+                } else {
+                    results.add(item);
                 }
             }
         } else if (keyConditionExpression != null) {

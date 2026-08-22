@@ -532,6 +532,86 @@ class DynamoDbServiceTest {
                 5L, 5L, List.of(gsi), region);
     }
 
+    private void createTableWithCompositePartitionKeyGsi(String region) {
+        GlobalSecondaryIndex gsi = new GlobalSecondaryIndex(
+                "tenantRegionIndex",
+                List.of(
+                        new KeySchemaElement("tenantId", "HASH"),
+                        new KeySchemaElement("region", "HASH"),
+                        new KeySchemaElement("createdAt", "RANGE")),
+                null, "ALL", null);
+        service.createTable("Accounts",
+                List.of(new KeySchemaElement("id", "HASH")),
+                List.of(
+                        new AttributeDefinition("id", "S"),
+                        new AttributeDefinition("tenantId", "S"),
+                        new AttributeDefinition("region", "S"),
+                        new AttributeDefinition("createdAt", "S")),
+                5L, 5L, List.of(gsi), region);
+        service.putItem("Accounts",
+                item("id", "1", "tenantId", "acme", "region", "us", "createdAt", "2026-01-01"), region);
+        service.putItem("Accounts",
+                item("id", "2", "tenantId", "acme", "region", "eu", "createdAt", "2026-01-02"), region);
+    }
+
+    @Test
+    void queryOnCompositePartitionKeyGsiRequiresEveryHashAttribute() {
+        String region = "eu-west-1";
+        createTableWithCompositePartitionKeyGsi(region);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":t", attributeValue("S", "acme"));
+
+        AwsException error = assertThrows(AwsException.class, () -> service.query(
+                "Accounts", null, exprValues, "tenantId = :t",
+                null, null, null, "tenantRegionIndex", null, null, region));
+        assertEquals("ValidationException", error.getErrorCode());
+    }
+
+    @Test
+    void queryOnCompositePartitionKeyGsiFiltersByEveryHashAttribute() {
+        String region = "eu-west-1";
+        createTableWithCompositePartitionKeyGsi(region);
+
+        ObjectNode exprValues = mapper.createObjectNode();
+        exprValues.set(":t", attributeValue("S", "acme"));
+        exprValues.set(":r", attributeValue("S", "us"));
+
+        DynamoDbService.QueryResult results = service.query(
+                "Accounts", null, exprValues, "tenantId = :t AND region = :r",
+                null, null, null, "tenantRegionIndex", null, null, region);
+
+        assertEquals(List.of("1"), results.items().stream()
+                .map(item -> item.get("id").get("S").asText())
+                .toList());
+    }
+
+    @Test
+    void legacyQueryOnCompositePartitionKeyGsiFiltersByEveryHashAttribute() {
+        String region = "eu-west-1";
+        createTableWithCompositePartitionKeyGsi(region);
+
+        ObjectNode keyConditions = mapper.createObjectNode();
+        keyConditions.set("tenantId", legacyEqCondition("acme"));
+        keyConditions.set("region", legacyEqCondition("us"));
+
+        DynamoDbService.QueryResult results = service.query("Accounts", keyConditions, null, null,
+                null, null, null, "tenantRegionIndex", null, null, region);
+
+        assertEquals(List.of("1"), results.items().stream()
+                .map(item -> item.get("id").get("S").asText())
+                .toList());
+    }
+
+    private ObjectNode legacyEqCondition(String value) {
+        ObjectNode condition = mapper.createObjectNode();
+        condition.put("ComparisonOperator", "EQ");
+        var attrList = mapper.createArrayNode();
+        attrList.add(attributeValue("S", value));
+        condition.set("AttributeValueList", attrList);
+        return condition;
+    }
+
     @Test
     void queryAppliesFilterExpressionAfterKeyCondition() {
         String region = "eu-west-1";
