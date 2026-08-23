@@ -34,6 +34,7 @@ Floci emulates 73 AWS services. See the [Services Overview](services/index.md) f
 | Step Functions | JSON 1.1 |
 | IAM | Query |
 | STS | Query |
+| Organizations | JSON 1.1 |
 | ElastiCache (Redis / Valkey) | Query + RESP proxy |
 | RDS (PostgreSQL / MySQL) | Query + wire proxy |
 | RDS Data API | REST JSON |
