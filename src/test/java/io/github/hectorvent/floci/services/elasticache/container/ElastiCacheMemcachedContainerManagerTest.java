@@ -24,23 +24,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class ElastiCacheContainerManagerTest {
+class ElastiCacheMemcachedContainerManagerTest {
 
-    private static final Logger LOG = Logger.getLogger(ElastiCacheContainerManagerTest.class);
-
-    @Test
-    void stopByGroupIdRemovesByDeterministicNameWhenNothingRegistered() {
-        ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
-        ElastiCacheContainerManager manager = new ElastiCacheContainerManager(
-                mock(ContainerBuilder.class), lifecycleManager, mock(ContainerLogStreamer.class),
-                mock(ContainerDetector.class), mock(EmulatorConfig.class), mock(RegionResolver.class));
-
-        // No container was ever registered for this id (e.g. it failed before registration).
-        // Rollback must still fall back to the deterministic name so nothing is orphaned.
-        manager.stopByGroupId("my-group");
-
-        verify(lifecycleManager).removeIfExists("floci-valkey-my-group");
-    }
+    private static final Logger LOG = Logger.getLogger(ElastiCacheMemcachedContainerManagerTest.class);
 
     @Test
     void startLabelsContainerWithResourceIdentity() throws IOException {
@@ -48,7 +34,7 @@ class ElastiCacheContainerManagerTest {
             Thread acceptor = new Thread(() -> {
                 try (Socket socket = serverSocket.accept()) {
                     socket.getInputStream().read(new byte[1024]);
-                    socket.getOutputStream().write("+PONG\r\n".getBytes(StandardCharsets.UTF_8));
+                    socket.getOutputStream().write("VERSION 1.6.0\r\n".getBytes(StandardCharsets.UTF_8));
                     socket.getOutputStream().flush();
                 } catch (IOException e) {
                     LOG.debugv(e, "Acceptor socket closed during test teardown");
@@ -59,7 +45,7 @@ class ElastiCacheContainerManagerTest {
 
             ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
             when(lifecycleManager.createAndStart(any())).thenReturn(new ContainerLifecycleManager.ContainerInfo(
-                    "container-id", Map.of(6379,
+                    "container-id", Map.of(11211,
                             new ContainerLifecycleManager.EndpointInfo(
                                     "127.0.0.1", serverSocket.getLocalPort()))));
 
@@ -79,15 +65,16 @@ class ElastiCacheContainerManagerTest {
             when(regionResolver.getAccountId()).thenReturn("000000000000");
             when(regionResolver.getDefaultRegion()).thenReturn("us-east-1");
 
-            ElastiCacheContainerManager manager = new ElastiCacheContainerManager(containerBuilder, lifecycleManager,
-                    mock(ContainerLogStreamer.class), mock(ContainerDetector.class), config, regionResolver);
+            ElastiCacheMemcachedContainerManager manager = new ElastiCacheMemcachedContainerManager(
+                    containerBuilder, lifecycleManager, mock(ContainerLogStreamer.class),
+                    mock(ContainerDetector.class), config, regionResolver);
 
-            manager.start("my-group", "valkey/valkey:7.2");
+            manager.start("my-cluster", "memcached:1.6");
 
             verify(builder).withLabels(Map.of(
                     "io.floci", "aws",
                     "io.floci.service", "elasticache",
-                    "io.floci.resource-id", "my-group",
+                    "io.floci.resource-id", "my-cluster",
                     "io.floci.account", "000000000000",
                     "io.floci.region", "us-east-1"));
         }
