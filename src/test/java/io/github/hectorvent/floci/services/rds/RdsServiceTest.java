@@ -4558,7 +4558,7 @@ class RdsServiceTest {
         return new RdsService(containerManager, proxyManager, ec2Service, resolver, config,
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>(),
                 new InMemoryStorage<>(), new InMemoryStorage<>(), null, null, null,
-                new InMemoryStorage<>(), new InMemoryStorage<>(), optionGroups);
+                new InMemoryStorage<>(), new InMemoryStorage<>(), optionGroups, null);
     }
 
     private DbInstance createInstanceWithOptionGroup(
