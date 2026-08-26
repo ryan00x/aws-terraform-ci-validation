@@ -397,6 +397,17 @@ public class OrganizationsService {
         return List.of(new ParentRef(parentId, parentType(organization, parentId)));
     }
 
+    /**
+     * The organization path of a root, OU or account:
+     * {@code o-<org>/r-<root>[/ou-<ou>]*[/<accountId>]/}, trailing slash included. This is the
+     * value the Organizations API reports as {@code OrganizationalUnit.Path} and as the single
+     * entry of {@code Account.Paths}, and what {@code Fn::GetAtt} returns for the same keys.
+     */
+    public String organizationPath(String callerAccountId, String resourceId) {
+        Organization organization = requireOrganizationForCaller(callerAccountId);
+        return organization.getId() + "/" + String.join("/", ancestryOf(organization, resourceId)) + "/";
+    }
+
     public List<ChildRef> listChildren(String callerAccountId, String parentId, String childType) {
         Organization organization = requireOrganizationForCaller(callerAccountId);
         requireParent(organization, parentId);
@@ -948,6 +959,12 @@ public class OrganizationsService {
         }
         organization.setResourcePolicyContent(content);
         if (tags != null) {
+            // Put replaces rather than merges: a caller that supplies Tags is stating the full set,
+            // so a key it no longer lists is dropped. The resource policy is not addressable by
+            // TagResource/UntagResource the way accounts, OUs, roots and policies are, so this call
+            // is the only way CloudFormation can converge Tags on an update. Omitting Tags
+            // entirely (null) leaves the existing ones untouched.
+            organization.getResourcePolicyTags().clear();
             organization.getResourcePolicyTags().putAll(tags);
         }
         organizations.putForAccount(organization.getMasterAccountId(), organization.getId(), organization);
@@ -1159,6 +1176,50 @@ public class OrganizationsService {
             throw accessDenied("This operation can be performed only by the management account of the organization.");
         }
         return organization;
+    }
+
+    /**
+     * The management account that owns the given organization, root, OU, account, policy or
+     * resource-policy id, or empty when nothing matches.
+     *
+     * <p>CloudFormation's delete path carries no caller identity — {@code CfnResourceProvisioner}
+     * hands over a physical id and a region only — so the owner has to be recovered from the
+     * resource itself before a management-account-scoped operation can run against it.
+     */
+    public Optional<String> findManagementAccountForResource(String resourceId) {
+        if (resourceId == null || resourceId.isEmpty()) {
+            return Optional.empty();
+        }
+        for (Organization organization : organizations.scanAllAccounts()) {
+            boolean owns = resourceId.equals(organization.getId())
+                    || resourceId.equals(organization.getRoot().getId())
+                    || resourceId.equals(organization.getResourcePolicyId());
+            if (owns) {
+                return Optional.of(organization.getMasterAccountId());
+            }
+        }
+        if (ACCOUNT_ID_PATTERN.matcher(resourceId).matches()) {
+            return accounts.scanAllAccounts().stream()
+                    .filter(account -> resourceId.equals(account.getId()))
+                    .findFirst()
+                    .flatMap(account -> organizationById(account.getOrganizationId()))
+                    .map(Organization::getMasterAccountId);
+        }
+        if (OU_ID_PATTERN.matcher(resourceId).matches()) {
+            return organizationalUnits.scanAllAccounts().stream()
+                    .filter(unit -> resourceId.equals(unit.getId()))
+                    .findFirst()
+                    .flatMap(unit -> organizationById(unit.getOrganizationId()))
+                    .map(Organization::getMasterAccountId);
+        }
+        if (POLICY_ID_PATTERN.matcher(resourceId).matches()) {
+            return policies.scanAllAccounts().stream()
+                    .filter(policy -> resourceId.equals(policy.getId()))
+                    .findFirst()
+                    .flatMap(policy -> organizationById(policy.getOrganizationId()))
+                    .map(Organization::getMasterAccountId);
+        }
+        return Optional.empty();
     }
 
     private Optional<Organization> findOrganizationForAccount(String accountId) {
