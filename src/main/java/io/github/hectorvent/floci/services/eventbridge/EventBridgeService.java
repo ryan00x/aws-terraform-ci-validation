@@ -339,10 +339,12 @@ public class EventBridgeService implements ResourceProvider {
 
     public void deleteRule(String name, String busName, String region) {
         String effectiveBus = resolvedBusName(busName);
+        ensureBusExists(effectiveBus, region);
         String key = ruleKey(region, effectiveBus, name);
-        Rule rule = ruleStore.get(key)
-                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + name, 404));
+        Rule rule = ruleStore.get(key).orElse(null);
+        if (rule == null) {
+            return;
+        }
         List<Target> targets = targetStore.get(key).orElse(List.of());
         if (!targets.isEmpty()) {
             throw new AwsException("ValidationException",
@@ -362,7 +364,7 @@ public class EventBridgeService implements ResourceProvider {
         String effectiveBus = resolvedBusName(busName);
         return ruleStore.get(ruleKey(region, effectiveBus, name))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + name, 404));
+                        "Rule not found: " + name, 400));
     }
 
     public List<Rule> listRules(String busName, String namePrefix, String region) {
@@ -381,7 +383,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = ruleKey(region, effectiveBus, name);
         Rule rule = ruleStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + name, 404));
+                        "Rule not found: " + name, 400));
         rule.setState(RuleState.ENABLED);
         ruleStore.put(key, rule);
         startSchedulerIfNeeded(rule);
@@ -392,7 +394,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = ruleKey(region, effectiveBus, name);
         Rule rule = ruleStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + name, 404));
+                        "Rule not found: " + name, 400));
         rule.setState(RuleState.DISABLED);
         ruleStore.put(key, rule);
 
@@ -408,7 +410,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = ruleKey(region, effectiveBus, ruleName);
         ruleStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + ruleName, 404));
+                        "Rule not found: " + ruleName, 400));
         List<Target> existing = new ArrayList<>(targetStore.get(key).orElse(new ArrayList<>()));
         for (Target newTarget : newTargets) {
             existing.removeIf(t -> t.getId().equals(newTarget.getId()));
@@ -441,7 +443,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = ruleKey(region, effectiveBus, ruleName);
         ruleStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Rule not found: " + ruleName, 404));
+                        "Rule not found: " + ruleName, 400));
         return targetStore.get(key).orElse(List.of());
     }
 
@@ -494,7 +496,7 @@ public class EventBridgeService implements ResourceProvider {
             String key = archiveKey(region, archiveName);
             Archive archive = archiveStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Archive not found: " + archiveName, 404));
+                            "Archive not found: " + archiveName, 400));
             archive.getTags().putAll(tags);
             archiveStore.put(key, archive);
             resourceGroupsTaggingService.tagResources(List.of(resourceArn), tags, region);
@@ -505,7 +507,7 @@ public class EventBridgeService implements ResourceProvider {
             String key = busKey(region, busName);
             EventBus bus = busStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Resource not found: " + resourceArn, 404));
+                            "Resource not found: " + resourceArn, 400));
             bus.getTags().putAll(tags);
             busStore.put(key, bus);
             resourceGroupsTaggingService.tagResources(List.of(resourceArn), tags, region);
@@ -516,13 +518,13 @@ public class EventBridgeService implements ResourceProvider {
             String key = ruleKey(region, ref.busName(), ref.ruleName());
             Rule rule = ruleStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Resource not found: " + resourceArn, 404));
+                            "Resource not found: " + resourceArn, 400));
             rule.getTags().putAll(tags);
             ruleStore.put(key, rule);
             resourceGroupsTaggingService.tagResources(List.of(resourceArn), tags, region);
             return;
         }
-        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 404);
+        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 400);
     }
 
     public void untagResource(String resourceArn, List<String> tagKeys, String region) {
@@ -532,7 +534,7 @@ public class EventBridgeService implements ResourceProvider {
             String key = archiveKey(region, archiveName);
             Archive archive = archiveStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Archive not found: " + archiveName, 404));
+                            "Archive not found: " + archiveName, 400));
             tagKeys.forEach(archive.getTags()::remove);
             archiveStore.put(key, archive);
             resourceGroupsTaggingService.untagResources(List.of(resourceArn), tagKeys, region);
@@ -543,7 +545,7 @@ public class EventBridgeService implements ResourceProvider {
             String key = busKey(region, busName);
             EventBus bus = busStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Resource not found: " + resourceArn, 404));
+                            "Resource not found: " + resourceArn, 400));
             tagKeys.forEach(bus.getTags()::remove);
             busStore.put(key, bus);
             resourceGroupsTaggingService.untagResources(List.of(resourceArn), tagKeys, region);
@@ -554,13 +556,13 @@ public class EventBridgeService implements ResourceProvider {
             String key = ruleKey(region, ref.busName(), ref.ruleName());
             Rule rule = ruleStore.get(key)
                     .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                            "Resource not found: " + resourceArn, 404));
+                            "Resource not found: " + resourceArn, 400));
             tagKeys.forEach(rule.getTags()::remove);
             ruleStore.put(key, rule);
             resourceGroupsTaggingService.untagResources(List.of(resourceArn), tagKeys, region);
             return;
         }
-        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 404);
+        throw new AwsException("ResourceNotFoundException", "Resource not found: " + resourceArn, 400);
     }
 
     // ──────────────────────────── Permissions ────────────────────────────
@@ -574,7 +576,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = busKey(region, effectiveBus);
         EventBus bus = busStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "EventBus not found: " + effectiveBus, 404));
+                        "EventBus not found: " + effectiveBus, 400));
 
         try {
             if (policyJson != null && !policyJson.isBlank()) {
@@ -643,7 +645,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = busKey(region, effectiveBus);
         EventBus bus = busStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "EventBus not found: " + effectiveBus, 404));
+                        "EventBus not found: " + effectiveBus, 400));
 
         if (removeAll) {
             bus.setPolicy(null);
@@ -1083,7 +1085,7 @@ public class EventBridgeService implements ResourceProvider {
         }
         busStore.get(busKey(region, busName))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "EventBus not found: " + busName, 404));
+                        "EventBus not found: " + busName, 400));
     }
 
     private static boolean isBlank(Object value) {
@@ -1170,7 +1172,7 @@ public class EventBridgeService implements ResourceProvider {
     public Archive describeArchive(String archiveName, String region) {
         return archiveStore.get(archiveKey(region, archiveName))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Archive not found: " + archiveName, 404));
+                        "Archive not found: " + archiveName, 400));
     }
 
     public Archive updateArchive(String archiveName, String description,
@@ -1178,7 +1180,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = archiveKey(region, archiveName);
         Archive archive = archiveStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Archive not found: " + archiveName, 404));
+                        "Archive not found: " + archiveName, 400));
         if (description != null) {
             archive.setDescription(description);
         }
@@ -1192,7 +1194,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = archiveKey(region, archiveName);
         Archive archive = archiveStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Archive not found: " + archiveName, 404));
+                        "Archive not found: " + archiveName, 400));
         archiveStore.delete(key);
         archivedEventStore.delete(archivedEventKey(region, archiveName));
         resourceGroupsTaggingService.deleteResources(List.of(archive.getArchiveArn()), region);
@@ -1264,7 +1266,7 @@ public class EventBridgeService implements ResourceProvider {
     public Connection describeConnection(String name, String region) {
         return connectionStore.get(connectionKey(region, name))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Connection " + name + " does not exist.", 404));
+                        "Connection " + name + " does not exist.", 400));
     }
 
     public Connection updateConnection(String name, String description, String authorizationType,
@@ -1273,7 +1275,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = connectionKey(region, name);
         Connection connection = connectionStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Connection " + name + " does not exist.", 404));
+                        "Connection " + name + " does not exist.", 400));
         if (authorizationType != null) {
             validateAuthorizationType(authorizationType);
             if (!authorizationType.equals(connection.getAuthorizationType()) && authParameters == null) {
@@ -1306,7 +1308,7 @@ public class EventBridgeService implements ResourceProvider {
         String key = connectionKey(region, name);
         Connection connection = connectionStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Connection " + name + " does not exist.", 404));
+                        "Connection " + name + " does not exist.", 400));
         connectionStore.delete(key);
         LOG.infov("Deleted connection: {0}", name);
         return connection;
@@ -1403,7 +1405,7 @@ public class EventBridgeService implements ResourceProvider {
         String archiveName = archiveNameFromArn(eventSourceArn);
         Archive archive = archiveStore.get(archiveKey(region, archiveName))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Archive not found: " + archiveName, 404));
+                        "Archive not found: " + archiveName, 400));
 
         List<ArchivedEvent> events = archivedEventStore
                 .get(archivedEventKey(region, archiveName))
@@ -1439,14 +1441,14 @@ public class EventBridgeService implements ResourceProvider {
     public Replay describeReplay(String replayName, String region) {
         return replayStore.get(replayKey(region, replayName))
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Replay not found: " + replayName, 404));
+                        "Replay not found: " + replayName, 400));
     }
 
     public Replay cancelReplay(String replayName, String region) {
         String key = replayKey(region, replayName);
         Replay replay = replayStore.get(key)
                 .orElseThrow(() -> new AwsException("ResourceNotFoundException",
-                        "Replay not found: " + replayName, 404));
+                        "Replay not found: " + replayName, 400));
         if (replay.getState() != ReplayState.RUNNING && replay.getState() != ReplayState.STARTING) {
             throw new AwsException("IllegalStatusException",
                     "Replay is not in a cancellable state: " + replay.getState(), 400);
