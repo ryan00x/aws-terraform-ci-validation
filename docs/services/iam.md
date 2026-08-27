@@ -176,6 +176,32 @@ no effect on later starts — the skip is logged at debug with both values. `/_f
 clears the alias without re-seeding it, as it does the optional deployer principal; the seed
 returns on restart.
 
+### Account Password Policy
+
+| Action | Description |
+|--------|-------------|
+| GetAccountPasswordPolicy | Returns the account's password policy. |
+| UpdateAccountPasswordPolicy | Replaces the account's password policy wholesale. |
+| DeleteAccountPasswordPolicy | Removes the account's password policy. |
+
+An account holds one password policy. `UpdateAccountPasswordPolicy` replaces it wholesale rather
+than merging — a field the caller omits resets to its AWS-documented default (`false` for the
+boolean requirements, `AllowUsersToChangePassword` and `HardExpiry`; `6` for
+`MinimumPasswordLength`; unset for the optional `MaxPasswordAge` and `PasswordReusePrevention`)
+rather than carrying over the previous value. Unlike the two optional integer fields,
+`HardExpiry` is never absent from the response — AWS documents it as a boolean that always
+defaults to `false`, so `GetAccountPasswordPolicy` always echoes it back. `ExpirePasswords` is
+derived, not stored: it reports `true` exactly when `MaxPasswordAge` is set.
+
+`GetAccountPasswordPolicy` and `DeleteAccountPasswordPolicy` both return `NoSuchEntity` when no
+policy has ever been set — a documented, expected result the Terraform provider's
+`aws_iam_account_password_policy` resource branches on. `MinimumPasswordLength` must be 6–128,
+`MaxPasswordAge` 1–1095, and `PasswordReusePrevention` 1–24; a value outside those ranges is
+rejected with `ValidationError`. The integer parameters (`MinimumPasswordLength`, `MaxPasswordAge`,
+`PasswordReusePrevention`) and the boolean parameters both reject anything that isn't parseable —
+a malformed integer or a value other than `true`/`false` (case-insensitive) returns
+`ValidationError` rather than silently falling back to a default.
+
 ### OIDC Identity Providers
 
 | Action | Description |
