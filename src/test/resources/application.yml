@@ -359,3 +359,7 @@ floci:
       enabled: true
     bedrock-agent-core-control:
       enabled: true
+    servicequotas:
+      enabled: true
+    ram:
+      enabled: true
