@@ -349,6 +349,8 @@ floci:
       enabled: true
     controltower:
       enabled: true
+    route53resolver:
+      enabled: true
     lakeformation:
       enabled: true
     tagging:

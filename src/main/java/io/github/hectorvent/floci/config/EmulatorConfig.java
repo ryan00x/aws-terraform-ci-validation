@@ -672,6 +672,7 @@ public interface EmulatorConfig {
         RumServiceConfig rum();
         GuardDutyServiceConfig guardduty();
         EmrServerlessServiceConfig emrserverless();
+        Route53ResolverServiceConfig route53resolver();
         NetworkFirewallServiceConfig networkfirewall();
         ServiceCatalogServiceConfig servicecatalog();
         SsoAdminServiceConfig ssoadmin();
@@ -729,6 +730,11 @@ public interface EmulatorConfig {
     }
 
     interface EmrServerlessServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface Route53ResolverServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
