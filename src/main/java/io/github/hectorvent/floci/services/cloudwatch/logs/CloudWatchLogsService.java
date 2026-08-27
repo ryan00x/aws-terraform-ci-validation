@@ -167,7 +167,12 @@ public class CloudWatchLogsService implements ResourceProvider {
 
     public void createLogGroup(String name, Integer retentionInDays, Map<String, String> tags,
                                boolean deletionProtectionEnabled, String region) {
-        createLogGroupForAccount(null, name, retentionInDays, tags, deletionProtectionEnabled, region);
+        createLogGroup(name, retentionInDays, tags, deletionProtectionEnabled, null, region);
+    }
+
+    public void createLogGroup(String name, Integer retentionInDays, Map<String, String> tags,
+                               boolean deletionProtectionEnabled, String kmsKeyId, String region) {
+        createLogGroupForAccount(null, name, retentionInDays, tags, deletionProtectionEnabled, kmsKeyId, region);
     }
 
     public void createLogGroupForAccount(
@@ -179,6 +184,12 @@ public class CloudWatchLogsService implements ResourceProvider {
     public void createLogGroupForAccount(
             String accountId, String name, Integer retentionInDays,
             Map<String, String> tags, boolean deletionProtectionEnabled, String region) {
+        createLogGroupForAccount(accountId, name, retentionInDays, tags, deletionProtectionEnabled, null, region);
+    }
+
+    public void createLogGroupForAccount(
+            String accountId, String name, Integer retentionInDays,
+            Map<String, String> tags, boolean deletionProtectionEnabled, String kmsKeyId, String region) {
         if (name == null || name.isBlank()) {
             throw new AwsException("InvalidParameterException", "logGroupName is required.", 400);
         }
@@ -192,6 +203,9 @@ public class CloudWatchLogsService implements ResourceProvider {
         group.setCreatedTime(System.currentTimeMillis());
         group.setRetentionInDays(retentionInDays);
         group.setDeletionProtectionEnabled(deletionProtectionEnabled);
+        if (kmsKeyId != null && !kmsKeyId.isBlank()) {
+            group.setKmsKeyId(kmsKeyId);
+        }
         if (tags != null) {
             group.setTags(new HashMap<>(tags));
         }
@@ -290,6 +304,36 @@ public class CloudWatchLogsService implements ResourceProvider {
                         "The specified log group does not exist: " + groupName, 400));
         tagKeys.forEach(group.getTags()::remove);
         groupStore.put(key, group);
+    }
+
+    /**
+     * Associates a KMS CMK with a log group so its stored events are encrypted with it.
+     *
+     * <p>The association is a property of the group, not of each event, and it is surfaced by
+     * {@code DescribeLogGroups}: callers converge by reading {@code kmsKeyId} back and only
+     * re-associating when it differs from the key they want.
+     */
+    public void associateKmsKey(String groupName, String kmsKeyId, String region) {
+        if (kmsKeyId == null || kmsKeyId.isBlank()) {
+            throw new AwsException("InvalidParameterException", "kmsKeyId required.", 400);
+        }
+        String key = groupKey(region, groupName);
+        LogGroup group = groupStore.get(key)
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                        "The specified log group does not exist: " + groupName, 400));
+        group.setKmsKeyId(kmsKeyId);
+        groupStore.put(key, group);
+        LOG.infov("Associated KMS key {0} with log group {1}", kmsKeyId, groupName);
+    }
+
+    public void disassociateKmsKey(String groupName, String region) {
+        String key = groupKey(region, groupName);
+        LogGroup group = groupStore.get(key)
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException",
+                        "The specified log group does not exist: " + groupName, 400));
+        group.setKmsKeyId(null);
+        groupStore.put(key, group);
+        LOG.infov("Disassociated KMS key from log group {0}", groupName);
     }
 
     public Map<String, String> listTagsLogGroup(String groupName, String region) {
