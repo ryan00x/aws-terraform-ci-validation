@@ -17,6 +17,7 @@ import io.github.hectorvent.floci.services.ec2.model.SecurityGroupRule;
 import io.github.hectorvent.floci.services.ec2.model.UserIdGroupPair;
 import io.github.hectorvent.floci.services.ec2.model.InstanceState;
 import io.github.hectorvent.floci.services.ec2.model.LaunchTemplate;
+import io.github.hectorvent.floci.services.ec2.model.LaunchTemplateData;
 import io.github.hectorvent.floci.services.ec2.model.ManagedPrefixList;
 import io.github.hectorvent.floci.services.ec2.model.SecurityGroupRule;
 import io.github.hectorvent.floci.services.ec2.model.PrefixListId;
@@ -221,28 +222,92 @@ class Ec2ServiceTest {
                 mock(Ec2PortForwardManager.class),
                 mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
                 new InMemoryStorageFactory());
-        LaunchTemplate template = service.createLaunchTemplate("us-east-1", "app-template",
-                "ami-source", "t3.micro", "app-key", List.of("sg-source"),
-                "source-user-data", "c291cmNlLXVzZXItZGF0YQ==",
-                "arn:aws:iam::000000000000:instance-profile/app-profile",
-                List.of(), List.of(new Tag("Role", "source")));
+        LaunchTemplateData source = new LaunchTemplateData();
+        source.setImageId("ami-source");
+        source.setInstanceType("t3.micro");
+        source.setKeyName("app-key");
+        source.setSecurityGroupIds(List.of("sg-source"));
+        source.setUserData("source-user-data");
+        source.setEncodedUserData("c291cmNlLXVzZXItZGF0YQ==");
+        source.setIamInstanceProfile(new LaunchTemplateData.IamInstanceProfile(
+                "arn:aws:iam::000000000000:instance-profile/app-profile", null));
+        source.setTagSpecifications(List.of(
+                new LaunchTemplateData.TagSpecification("instance", List.of(new Tag("Role", "source")))));
+        LaunchTemplate template = service.createLaunchTemplate("us-east-1", "app-template", source, List.of());
 
-        service.createLaunchTemplateVersion("us-east-1", template.getLaunchTemplateId(), null,
-                "1", null, "t3.small", null, List.of(), null, null, null, List.of());
+        LaunchTemplateData override = new LaunchTemplateData();
+        override.setInstanceType("t3.small");
+        service.createLaunchTemplateVersion("us-east-1", template.getLaunchTemplateId(), null, "1", override);
 
         LaunchTemplate version = service.describeLaunchTemplateVersions(
                 "us-east-1", template.getLaunchTemplateId(), null, List.of("2")).getFirst();
-        assertEquals("ami-source", version.getImageId());
-        assertEquals("t3.small", version.getInstanceType());
-        assertEquals("app-key", version.getKeyName());
-        assertEquals(List.of("sg-source"), version.getSecurityGroupIds());
-        assertEquals("source-user-data", version.getUserData());
-        assertEquals("c291cmNlLXVzZXItZGF0YQ==", version.getEncodedUserData());
-        assertEquals("arn:aws:iam::000000000000:instance-profile/app-profile", version.getIamInstanceProfileArn());
+        LaunchTemplateData data = version.getData();
+        assertEquals("ami-source", data.getImageId());
+        assertEquals("t3.small", data.getInstanceType());
+        assertEquals("app-key", data.getKeyName());
+        assertEquals(List.of("sg-source"), data.getSecurityGroupIds());
+        assertEquals("source-user-data", data.getUserData());
+        assertEquals("c291cmNlLXVzZXItZGF0YQ==", data.getEncodedUserData());
+        assertEquals("arn:aws:iam::000000000000:instance-profile/app-profile",
+                data.getIamInstanceProfile().getArn());
         assertEquals("2", version.getLatestVersionNumber());
-        assertEquals(1, version.getInstanceTags().size());
-        assertEquals("Role", version.getInstanceTags().getFirst().getKey());
-        assertEquals("source", version.getInstanceTags().getFirst().getValue());
+        assertEquals(1, data.getInstanceTags().size());
+        assertEquals("Role", data.getInstanceTags().getFirst().getKey());
+        assertEquals("source", data.getInstanceTags().getFirst().getValue());
+    }
+
+    @Test
+    void launchTemplateVersionWithoutSourceVersionDoesNotInheritFromLatest() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        LaunchTemplateData source = new LaunchTemplateData();
+        source.setImageId("ami-source");
+        source.setInstanceType("t3.micro");
+        source.setKeyName("app-key");
+        source.setSecurityGroupIds(List.of("sg-source"));
+        LaunchTemplate template = service.createLaunchTemplate("us-east-1", "no-source-template", source, List.of());
+
+        LaunchTemplateData override = new LaunchTemplateData();
+        override.setInstanceType("t3.small");
+        // No SourceVersion at all — AWS documents this as "no source specified, no inheritance",
+        // not as an implicit fallback onto the latest version.
+        service.createLaunchTemplateVersion("us-east-1", template.getLaunchTemplateId(), null, null, override);
+
+        LaunchTemplate version = service.describeLaunchTemplateVersions(
+                "us-east-1", template.getLaunchTemplateId(), null, List.of("2")).getFirst();
+        LaunchTemplateData data = version.getData();
+        assertEquals("t3.small", data.getInstanceType());
+        assertNull(data.getImageId(), "omitted SourceVersion must not inherit ImageId from version 1");
+        assertNull(data.getKeyName(), "omitted SourceVersion must not inherit KeyName from version 1");
+        assertEquals(List.of(), data.getSecurityGroupIds(),
+                "omitted SourceVersion must not inherit SecurityGroupIds from version 1");
+    }
+
+    @Test
+    void launchTemplateVersionDescriptionRoundTrips() {
+        Ec2Service service = new Ec2Service(mockConfig(true), mock(Ec2ContainerManager.class),
+                mock(Ec2PortForwardManager.class),
+                mock(AmiImageResolver.class), mock(Ec2ImageCatalog.class), new Ec2InstanceTypeCatalog(),
+                new InMemoryStorageFactory());
+        LaunchTemplateData source = new LaunchTemplateData();
+        source.setImageId("ami-source");
+        LaunchTemplate template = service.createLaunchTemplate(
+                "us-east-1", "described-template", source, List.of(), "initial version");
+
+        LaunchTemplateData override = new LaunchTemplateData();
+        override.setInstanceType("t3.small");
+        LaunchTemplate created = service.createLaunchTemplateVersion(
+                "us-east-1", template.getLaunchTemplateId(), null, "1", override, "second version");
+        assertEquals("second version", created.getVersionDescription());
+
+        LaunchTemplate v1 = service.describeLaunchTemplateVersions(
+                "us-east-1", template.getLaunchTemplateId(), null, List.of("1")).getFirst();
+        LaunchTemplate v2 = service.describeLaunchTemplateVersions(
+                "us-east-1", template.getLaunchTemplateId(), null, List.of("2")).getFirst();
+        assertEquals("initial version", v1.getVersionDescription());
+        assertEquals("second version", v2.getVersionDescription());
     }
 
     @Test

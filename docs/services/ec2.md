@@ -472,6 +472,52 @@ Route table ids follow the live API's own inconsistency: an id that does not exi
 
 Launch templates store versioned launch data. New template versions can be created from an existing source version, and `ModifyLaunchTemplate` updates the default version used by later launches.
 
+#### Launch template data members
+
+These members of `RequestLaunchTemplateData` are stored and read back unchanged by
+`DescribeLaunchTemplateVersions`:
+
+`ImageId`, `InstanceType`, `KeyName`, `UserData`, `KernelId`, `RamDiskId`, `SecurityGroupIds`,
+`IamInstanceProfile`, `BlockDeviceMappings`, `NetworkInterfaces`, `TagSpecifications`,
+`MetadataOptions`, `Monitoring`, `Placement`, `CpuOptions`, `CreditSpecification`,
+`EnclaveOptions`, `HibernationOptions`, `MaintenanceOptions`, `PrivateDnsNameOptions`,
+`CapacityReservationSpecification`, `EbsOptimized`, `DisableApiTermination`, `DisableApiStop`,
+`InstanceInitiatedShutdownBehavior`.
+
+Two behaviours worth calling out, because they are what Terraform reads back:
+
+- **`IamInstanceProfile` keeps the form it was given.** A profile submitted as `Name` reads back as
+  `Name`, not rewritten to `Arn`. The instance-profile ARN is derived at launch time instead, so
+  `aws_launch_template.iam_instance_profile.name` converges.
+- **`NetworkInterfaces` stays a `NetworkInterfaces` block.** Its `Groups` are not hoisted into
+  top-level `SecurityGroupIds`; on AWS the two are mutually exclusive. A launch from the template
+  resolves its security groups from whichever of the two is populated.
+
+#### Launch template versions
+
+`CreateLaunchTemplateVersion` accepts two members outside `LaunchTemplateData` itself:
+
+- **`SourceVersion` controls inheritance, and omitting it means no inheritance.** A request that
+  names a source version — including `$Latest` or `$Default` — layers its own fields onto that
+  version's data, so only the fields it restates change. A request that omits `SourceVersion`
+  entirely does **not** fall back to the latest version: the new version starts from an empty
+  `LaunchTemplateData`, populated only by whatever fields the request itself supplies. This matches
+  the AWS-documented behavior; it does not merge onto any prior version.
+- **`VersionDescription` is stored and read back by `DescribeLaunchTemplateVersions`.** It is a
+  version-level field on `LaunchTemplateVersion`, not a member of `RequestLaunchTemplateData` /
+  `ResponseLaunchTemplateData`, so it is tracked per version alongside `VersionNumber` and
+  `CreateTime` rather than inside the launch template data payload. `CreateLaunchTemplate` accepts
+  the same field for the initial version it creates.
+
+Members the service model declares that are accepted and ignored rather than stored:
+`InstanceMarketOptions`, `InstanceRequirements`, `LicenseSpecifications`, `ElasticGpuSpecifications`,
+`ElasticInferenceAccelerators`, `NetworkPerformanceOptions`, `Operator`, `SecondaryInterfaces` and
+`SecurityGroups` (security groups by name — resolving names to IDs would need lookup machinery,
+including ambiguity handling across VPCs, that no other EC2 action here has either; `RunInstances`
+itself only accepts `SecurityGroupId`). Within `NetworkInterfaces`, the IPv4/IPv6 address and
+prefix lists, `EnaSrdSpecification`, `ConnectionTrackingSpecification`, `PrimaryIpv6` and
+`EnaQueueCount` are likewise ignored.
+
 ### IAM Instance Profiles
 
 | Action | Description |
