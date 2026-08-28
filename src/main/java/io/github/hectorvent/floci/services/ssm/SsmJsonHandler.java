@@ -383,8 +383,15 @@ public class SsmJsonHandler {
      * be reported back by DescribeDocumentPermission as though the share had happened.
      */
     private List<String> accountIds(JsonNode request, String field) {
+        JsonNode fieldNode = request.path(field);
+        if (!fieldNode.isMissingNode() && !fieldNode.isNull() && !fieldNode.isArray()) {
+            throw new AwsException("ValidationException",
+                    "1 validation error detected: Value at '" + decapitalize(field) + "' failed to satisfy "
+                            + "constraint: Member must be a list",
+                    400);
+        }
         List<String> accountIds = new ArrayList<>();
-        request.path(field).forEach(node -> accountIds.add(node.asText()));
+        fieldNode.forEach(node -> accountIds.add(node.asText()));
         if (accountIds.size() > MAX_ACCOUNT_IDS) {
             throw new AwsException("ValidationException",
                     "1 validation error detected: Value at '" + decapitalize(field) + "' failed to satisfy "
@@ -474,6 +481,13 @@ public class SsmJsonHandler {
         requireSharePermissionType(request);
         List<String> accountIdsToAdd = accountIds(request, "AccountIdsToAdd");
         List<String> accountIdsToRemove = accountIds(request, "AccountIdsToRemove");
+        if (accountIdsToAdd.isEmpty() && accountIdsToRemove.isEmpty()) {
+            throw new AwsException("ValidationException",
+                    "1 validation error detected: Value null at 'accountIdsToAdd' failed to satisfy "
+                            + "constraint: Member must not be null, or a value must be specified for "
+                            + "'accountIdsToRemove'",
+                    400);
+        }
 
         ssmService.modifyDocumentPermission(name, accountIdsToAdd, accountIdsToRemove, region);
         return Response.ok(objectMapper.createObjectNode()).build();
@@ -601,6 +615,33 @@ public class SsmJsonHandler {
         return settingId;
     }
 
+    /**
+     * Reads the required {@code SettingValue} member of UpdateServiceSetting. Botocore models
+     * {@code ServiceSettingValue} as a string with {@code min: 1, max: 4096}; an absent or blank
+     * value silently stores an empty customized setting rather than failing, and an oversized one
+     * would sit in the store forever since GetServiceSetting just echoes it back.
+     */
+    private static final int MAX_SETTING_VALUE_LENGTH = 4096;
+
+    private String requireSettingValue(JsonNode request) {
+        JsonNode valueNode = request.path("SettingValue");
+        String settingValue = valueNode.asText();
+        if (!valueNode.isTextual() || settingValue.isEmpty()) {
+            throw new AwsException("ValidationException",
+                    "1 validation error detected: Value null at 'settingValue' failed to satisfy "
+                            + "constraint: Member must not be null",
+                    400);
+        }
+        if (settingValue.length() > MAX_SETTING_VALUE_LENGTH) {
+            throw new AwsException("ValidationException",
+                    "1 validation error detected: Value at 'settingValue' failed to satisfy "
+                            + "constraint: Member must have length less than or equal to "
+                            + MAX_SETTING_VALUE_LENGTH,
+                    400);
+        }
+        return settingValue;
+    }
+
     private Response handleGetServiceSetting(JsonNode request, String region) {
         String settingId = requireSettingId(request);
         ServiceSetting setting = ssmService.getServiceSetting(settingId, region);
@@ -612,7 +653,7 @@ public class SsmJsonHandler {
 
     private Response handleUpdateServiceSetting(JsonNode request, String region) {
         String settingId = requireSettingId(request);
-        String settingValue = request.path("SettingValue").asText();
+        String settingValue = requireSettingValue(request);
         ssmService.updateServiceSetting(settingId, settingValue, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
