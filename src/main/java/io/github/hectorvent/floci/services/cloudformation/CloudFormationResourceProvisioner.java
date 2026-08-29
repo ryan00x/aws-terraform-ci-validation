@@ -20,6 +20,7 @@ import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
 import io.github.hectorvent.floci.services.eventbridge.EventBridgeService;
 import io.github.hectorvent.floci.services.eventbridge.model.BatchParameters;
 import io.github.hectorvent.floci.services.eventbridge.model.EventBus;
+import io.github.hectorvent.floci.services.eventbridge.model.InputTransformer;
 import io.github.hectorvent.floci.services.eventbridge.model.RuleState;
 import io.github.hectorvent.floci.services.eventbridge.model.SqsParameters;
 import io.github.hectorvent.floci.services.eventbridge.model.Target;
@@ -3651,6 +3652,7 @@ public class CloudFormationResourceProvisioner {
                 String inputPath = resolved.path("InputPath").asText(null);
                 if (targetId != null && targetArn != null) {
                     Target target = new Target(targetId, targetArn, input, inputPath);
+                    target.setInputTransformer(InputTransformer.fromJson(resolved.path("InputTransformer")));
                     JsonNode sqsParamsNode = resolved.path("SqsParameters");
                     if (!sqsParamsNode.isMissingNode() && sqsParamsNode.isObject()) {
                         String messageGroupId = sqsParamsNode.path("MessageGroupId").asText(null);
