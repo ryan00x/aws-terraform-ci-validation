@@ -94,9 +94,16 @@ JSONata's own `$string` follows AWS's number notation: a whole number is written
 `1e21` and in exponent notation from there, on both signs, so `$string(1e20)` is
 `100000000000000000000` and `$string(1e21)` is `1e+21`.
 
-One deviation. AWS bounds the memory an expression may use and fails a `$range` of roughly half a
-million elements with `Expression evaluation memory limit exceeded`; Floci has no such bound and
-builds the array.
+Evaluation is bounded, as it is on AWS: one expression may run for five seconds and nest 500
+levels deep, and past either the state fails with `States.QueryEvaluationError`. Both bounds sit
+well above what AWS itself accepts, so an expression that evaluates there evaluates here. AWS
+refuses a non-tail-recursive function past a nesting depth near 100, and the largest sequence it
+accepts evaluates here in about a tenth of a second.
+
+One deviation. AWS also bounds the *memory* an expression may use, refusing
+`[1..900000] ~> $count()` with `Expression evaluation memory limit exceeded` while accepting the
+same expression at 800,000 elements. Floci bounds time and depth but not memory, and its ranges
+are lazy, so that expression answers immediately at any size.
 
 ## Mocked service integrations
 
