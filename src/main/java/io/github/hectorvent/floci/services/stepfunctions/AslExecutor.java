@@ -33,6 +33,7 @@ import io.github.hectorvent.floci.services.s3.model.S3Object;
 import io.github.hectorvent.floci.services.sqs.SqsJsonHandler;
 import io.github.hectorvent.floci.services.stepfunctions.model.Execution;
 import io.github.hectorvent.floci.services.stepfunctions.model.HistoryEvent;
+import io.github.hectorvent.floci.services.stepfunctions.model.MapRun;
 import io.github.hectorvent.floci.services.stepfunctions.model.MockedResponseStep;
 import io.github.hectorvent.floci.services.stepfunctions.model.MockedTestCase;
 import io.github.hectorvent.floci.services.stepfunctions.model.StateMachine;
@@ -991,6 +992,7 @@ public class AslExecutor {
             case "startSyncExecution" -> invokeAwsSdkSfnStartSyncExecution(input, region);
             case "sendTaskSuccess" -> invokeAwsSdkSfnSendTaskSuccess(input);
             case "sendTaskFailure" -> invokeAwsSdkSfnSendTaskFailure(input);
+            case "describeMapRun" -> invokeAwsSdkSfnDescribeMapRun(input);
             default -> throw new FailStateException("States.TaskFailed",
                     "Unsupported resource: " + AWS_SDK_SFN_PREFIX + action);
         };
@@ -1046,6 +1048,30 @@ public class AslExecutor {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("ExecutionArn", exec.getExecutionArn());
         response.put("StartDate", sdkTimestamp(exec.getStartDate()));
+        return response;
+    }
+
+    /**
+     * AWS SDK integration for {@code sfn:describeMapRun}. The SDK names every field in PascalCase
+     * and renders both dates as ISO-8601, where the wire response of the same run carries epoch
+     * seconds. Recasing that response is what keeps the two renderings of a Map run in step.
+     */
+    private JsonNode invokeAwsSdkSfnDescribeMapRun(JsonNode input) {
+        String mapRunArn = input.path("MapRunArn").asText(null);
+        if (mapRunArn == null || mapRunArn.isBlank()) {
+            throw new FailStateException("Sfn.InvalidArnException",
+                    "MapRunArn is required for DescribeMapRun");
+        }
+        MapRun mapRun;
+        try {
+            mapRun = sfnService.get().describeMapRun(mapRunArn);
+        } catch (AwsException e) {
+            throw new FailStateException(sdkExceptionName("Sfn", e.getErrorCode()), e.getMessage());
+        }
+        ObjectNode response = (ObjectNode) recaseKeys(objectMapper,
+                StepFunctionsJsonHandler.describeMapRunResponse(objectMapper, mapRun), true);
+        response.put("StartDate", sdkTimestamp(mapRun.getStartDate()));
+        response.put("StopDate", sdkTimestamp(mapRun.getStopDate()));
         return response;
     }
 
@@ -2018,6 +2044,7 @@ public class AslExecutor {
             }
             mapResult = applyResultWriter(name, stateDef, mapInput, results, childInputs, childTimings,
                     sm, context, jsonata, variables);
+            recordMapRun(mapResult, context, childTimings, requestedConcurrency);
         }
 
         if (jsonata) {
@@ -2068,6 +2095,42 @@ public class AslExecutor {
                 : INLINE_MAP_MAX_CONCURRENCY;
         int requestedLimit = requestedConcurrency == 0 ? serviceLimit : requestedConcurrency;
         return Math.min(itemCount, Math.min(requestedLimit, serviceLimit));
+    }
+
+    /**
+     * Retains the Map run that {@link #applyResultWriter} just exported, so {@code DescribeMapRun}
+     * can report its counters afterwards. Only an exported run is retained: the Map result is the
+     * one place an ASL author reads the Map run ARN, so a run without a {@code ResultWriter}
+     * {@code Resource} has no ARN anybody could describe.
+     *
+     * <p>The run starts with its first item, taken from the child timings the export record already
+     * collected, and stops here: the {@code ResultWriter} export has just returned, and AWS closes
+     * a Map run's window on the export rather than on the last item. A run over no items starts and
+     * stops at that same instant.
+     */
+    private void recordMapRun(JsonNode mapResult, JsonNode context, List<long[]> childTimings,
+                              int requestedConcurrency) {
+        String mapRunArn = mapResult.path("MapRunArn").asText(null);
+        if (mapRunArn == null) {
+            return;
+        }
+        long stop = System.currentTimeMillis();
+        long start = stop;
+        for (long[] timing : childTimings) {
+            start = Math.min(start, timing[0]);
+        }
+
+        MapRun mapRun = new MapRun();
+        mapRun.setMapRunArn(mapRunArn);
+        mapRun.setExecutionArn(context.path("Execution").path("Id").asText(null));
+        mapRun.setStartDate(start / 1000.0);
+        mapRun.setStopDate(stop / 1000.0);
+        mapRun.setItemCount(childTimings.size());
+        // ASL spells an unbounded Map as MaxConcurrency 0, or by omitting it; DescribeMapRun
+        // reports that same run as Integer.MAX_VALUE.
+        mapRun.setMaxConcurrency(
+                requestedConcurrency == 0 ? Integer.MAX_VALUE : requestedConcurrency);
+        sfnService.get().recordMapRun(mapRun);
     }
 
     /**
