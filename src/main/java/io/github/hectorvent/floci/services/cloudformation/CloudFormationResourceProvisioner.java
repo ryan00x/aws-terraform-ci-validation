@@ -3157,6 +3157,9 @@ public class CloudFormationResourceProvisioner {
         }
         ssmService.putParameter(name, value, type, null, true, region);
         r.setPhysicalId(name);
+        r.getAttributes().put("Name", name);
+        r.getAttributes().put("Type", type);
+        r.getAttributes().put("Value", value);
     }
 
     // ── KMS ───────────────────────────────────────────────────────────────────
@@ -6404,13 +6407,13 @@ public class CloudFormationResourceProvisioner {
                         "Custom resource handler errored (" + result.getFunctionError() + "): " + body, 400);
             }
 
-            return customResourceResponseStore.await(token, CR_RESPONSE_TIMEOUT);
+            return customResourceResponseStore.await(token, CR_RESPONSE_TIMEOUT, serviceToken, region);
         } catch (AwsException e) {
             throw e;
         } catch (TimeoutException e) {
             throw new AwsException("CustomResourceTimeout",
                     "Timed out waiting for custom resource " + logicalId
-                            + " to PUT its response to ResponseURL", 504);
+                            + " to PUT its response to ResponseURL: " + e.getMessage(), 504);
         } catch (Exception e) {
             throw new AwsException("CustomResourceFailed",
                     "Failed to invoke custom resource " + logicalId + ": " + e.getMessage(), 500);

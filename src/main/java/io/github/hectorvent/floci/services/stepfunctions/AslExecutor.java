@@ -4,6 +4,7 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsErrorResponse;
+import io.github.hectorvent.floci.core.common.CustomResourceLiveness;
 import io.github.hectorvent.floci.core.common.RequestContext;
 import io.github.hectorvent.floci.core.common.XmlParser;
 import io.github.hectorvent.floci.services.cloudformation.CloudFormationQueryHandler;
@@ -180,6 +181,7 @@ public class AslExecutor {
     private final Instance<StepFunctionsService> sfnService;
     private final WebClient webClient;
     private final EmulatorConfig config;
+    private final CustomResourceLiveness customResourceLiveness;
     private final Map<String, MockedTestCase> activeMocks = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "sfn-executor");
@@ -196,7 +198,9 @@ public class AslExecutor {
                        EventBridgeHandler eventBridgeHandler, SchedulerService schedulerService,
                        SchedulerController schedulerController,
                        ObjectMapper objectMapper, JsonataEvaluator jsonataEvaluator,
-                       Instance<StepFunctionsService> sfnService, EmulatorConfig config, Vertx vertx) {
+                       Instance<StepFunctionsService> sfnService, EmulatorConfig config, Vertx vertx,
+                       CustomResourceLiveness customResourceLiveness) {
+        this.customResourceLiveness = customResourceLiveness;
         this.lambdaExecutor = lambdaExecutor;
         this.functionStore = functionStore;
         this.dynamoDbService = dynamoDbService;
@@ -726,6 +730,21 @@ public class AslExecutor {
         return fn;
     }
 
+    /**
+     * Reports that a pending custom resource is still making progress, if this payload belongs to
+     * one. The Step Functions Task path drives a CDK provider-framework waiter's {@code
+     * framework.isComplete} polls straight through {@link LambdaExecutorService}, bypassing {@link
+     * io.github.hectorvent.floci.services.lambda.LambdaService#invoke} and the liveness hook it
+     * carries -- so this poll would otherwise never reset the resource's idle budget in {@link
+     * io.github.hectorvent.floci.services.cloudformation.CustomResourceResponseStore}.
+     */
+    private void reportCustomResourceLiveness(byte[] payload) {
+        if (customResourceLiveness == null) {
+            return;
+        }
+        CustomResourceLiveness.tokenIn(payload).ifPresent(customResourceLiveness::touch);
+    }
+
     private JsonNode invokeResource(String resource, JsonNode input, StateMachine sm, String taskToken) throws Exception {
         // Support Lambda resources: direct ARN or optimized integration
         String functionName = null;
@@ -759,8 +778,9 @@ public class AslExecutor {
                         "Lambda function not found: " + functionName);
             }
 
-            String payloadStr = objectMapper.writeValueAsString(lambdaPayload);
-            InvokeResult result = lambdaExecutor.invoke(fn, payloadStr.getBytes(), InvocationType.RequestResponse);
+            byte[] payloadBytes = objectMapper.writeValueAsString(lambdaPayload).getBytes();
+            reportCustomResourceLiveness(payloadBytes);
+            InvokeResult result = lambdaExecutor.invoke(fn, payloadBytes, InvocationType.RequestResponse);
 
             if (result.getFunctionError() != null) {
                 throw new FailStateException("Lambda.AWSLambdaException", result.getFunctionError());
