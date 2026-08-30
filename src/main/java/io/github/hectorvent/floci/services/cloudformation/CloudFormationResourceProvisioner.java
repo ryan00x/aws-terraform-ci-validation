@@ -3137,9 +3137,85 @@ public class CloudFormationResourceProvisioner {
                 ? props.get("PolicyDocument").toString()
                 : "{\"Version\":\"2012-10-17\",\"Statement\":[]}";
         List<String> roleNames = resolveStringList(props, "Roles", engine);
+        String existingArn = r.getPhysicalId();
 
-        var policy = iamService.createPolicy(policyName, "/", null, document, Map.of());
+        io.github.hectorvent.floci.services.iam.model.IamPolicy policy;
+        boolean createdPolicy = false;
+        String previousDefaultVersionId = null;
+        io.github.hectorvent.floci.services.iam.model.PolicyVersion createdVersionForRollback = null;
+        List<io.github.hectorvent.floci.services.iam.model.PolicyVersion> prunedVersionsForRollback =
+                new ArrayList<>();
+        List<String> detachedObsoleteRoles = new ArrayList<>();
+        try {
+            policy = iamService.createPolicy(policyName, "/", null, document, Map.of());
+            createdPolicy = true;
+        } catch (AwsException e) {
+            // Stack UPDATE with an unchanged policy name: the policy this stack provisioned on a
+            // previous pass already exists. PolicyDocument is a mutable property, so CloudFormation
+            // updates the policy in place (a new default version) rather than replacing it. Only
+            // adopt when the existing physical id is this exact policy — a collision with a policy
+            // some other stack owns must still fail like AWS does.
+            boolean stackAlreadyOwnsPolicy = existingArn != null
+                    && existingArn.endsWith(":policy/" + policyName);
+            if (!stackAlreadyOwnsPolicy || !"EntityAlreadyExists".equals(e.getErrorCode())) {
+                throw e;
+            }
+            policy = iamService.getPolicy(existingArn);
+            String policyId = r.getAttributes().get("PolicyId");
+            // A missing PolicyId means this resource predates PolicyId tracking (an upgrade from
+            // an older floci pass) — its identity can't be verified, and the ARN alone is not
+            // proof of ownership: a policy deleted and recreated under the same name reuses the
+            // same ARN with a different PolicyId. Fail closed rather than silently adopting
+            // (and mutating) a policy this stack no longer owns.
+            if (policyId == null || !policyId.equals(policy.getPolicyId())) {
+                throw e;
+            }
+            previousDefaultVersionId = policy.getDefaultVersionId();
+            // IAM caps a managed policy at 5 versions; prune the oldest non-default ones the way
+            // CloudFormation does, so repeated stack updates never die on LimitExceeded.
+            var versions = iamService.listPolicyVersions(existingArn).stream()
+                    .filter(v -> !v.isDefaultVersion())
+                    .sorted(java.util.Comparator.comparingInt(
+                            v -> Integer.parseInt(v.getVersionId().substring(1))))
+                    .toList();
+            for (int i = 0; i <= versions.size() - 4; i++) {
+                var pruned = versions.get(i);
+                // Captured before deletion so a later failure in this same update can recreate
+                // the content — the version id itself is gone for good (AWS never reissues one),
+                // but the document must survive a rollback that reports COMPLETE.
+                prunedVersionsForRollback.add(pruned);
+                iamService.deletePolicyVersion(existingArn, pruned.getVersionId());
+            }
+            createdVersionForRollback = iamService.createPolicyVersion(existingArn, document, true);
+            // Roles this stack attached on the previous pass but no longer listed in the
+            // template are detached, matching CloudFormation's update semantics.
+            String previousTargets = r.getAttributes().get("ManagedPolicyRoleTargets");
+            if (previousTargets != null && !previousTargets.isBlank()) {
+                for (String previousRole : previousTargets.split("\n")) {
+                    if (!roleNames.contains(previousRole)) {
+                        try {
+                            iamService.detachRolePolicy(previousRole, existingArn);
+                            detachedObsoleteRoles.add(previousRole);
+                        } catch (AwsException detachFailure) {
+                            // Update is idempotent like the delete path: the attachment can
+                            // already be gone on a retry, but other failures must still surface —
+                            // and must still restore the version/attachments this pass already
+                            // changed, the same as a failure in the attach loop below (this loop
+                            // runs first, so that loop's own catch never sees this failure).
+                            if (!"NoSuchEntity".equals(detachFailure.getErrorCode())) {
+                                restoreManagedPolicyOnUpdateFailure(detachFailure, r, existingArn,
+                                        false, Set.of(), detachedObsoleteRoles,
+                                        previousDefaultVersionId, createdVersionForRollback,
+                                        prunedVersionsForRollback);
+                                throw detachFailure;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         r.getAttributes().put(CfnRollback.ROLLBACK_OWNED_ATTR, "true");
+        r.getAttributes().put("PolicyId", policy.getPolicyId());
         r.setPhysicalId(policy.getArn());
         // PolicyArn is the attribute CloudFormation documents for this type, and what a template
         // written against AWS asks for. Without it Fn::GetAtt does not resolve and the unresolved
@@ -3150,31 +3226,117 @@ public class CloudFormationResourceProvisioner {
         r.getAttributes().put("PolicyArn", policy.getArn());
         r.getAttributes().put("ManagedPolicyRoleTargets", String.join("\n", roleNames));
 
+        String policyArn = policy.getArn();
+        // On adopt, attachments from the previous pass are not this attempt's to undo.
+        Set<String> previouslyAttached = createdPolicy
+                ? Set.of()
+                : iamService.listEntitiesForPolicy(policyArn).roles().stream()
+                        .map(role -> role.getRoleName())
+                        .collect(java.util.stream.Collectors.toSet());
         LinkedHashSet<String> attachedRoleNames = new LinkedHashSet<>();
         try {
             for (String roleName : roleNames) {
-                iamService.attachRolePolicy(roleName, policy.getArn());
-                attachedRoleNames.add(roleName);
+                iamService.attachRolePolicy(roleName, policyArn);
+                if (!previouslyAttached.contains(roleName)) {
+                    attachedRoleNames.add(roleName);
+                }
             }
         } catch (RuntimeException failure) {
-            List<String> rollbackRoles = new ArrayList<>(attachedRoleNames);
-            Collections.reverse(rollbackRoles);
-            boolean cleanupSucceeded = true;
-            for (String roleName : rollbackRoles) {
-                String cleanupDescription = "detach policy " + policy.getArn() + " from role " + roleName;
-                if (!CfnRollback.attemptIamCleanup(failure, cleanupDescription,
-                        () -> iamService.detachRolePolicy(roleName, policy.getArn()))) {
+            restoreManagedPolicyOnUpdateFailure(failure, r, policyArn, createdPolicy, attachedRoleNames,
+                    detachedObsoleteRoles, previousDefaultVersionId, createdVersionForRollback,
+                    prunedVersionsForRollback);
+            throw failure;
+        }
+    }
+
+    /**
+     * Undoes whatever this update attempt already did to a managed policy before it failed —
+     * shared by the attach loop above and the obsolete-role detach loop earlier in
+     * {@link #provisionIamManagedPolicy}, since a detach failure (e.g. a role that became
+     * unmodifiable between passes) can escape before the attach loop even runs, and must still
+     * restore the version/attachment state already changed in this pass.
+     */
+    private void restoreManagedPolicyOnUpdateFailure(
+            RuntimeException failure,
+            StackResource r,
+            String policyArn,
+            boolean createdPolicy,
+            Set<String> attachedRoleNames,
+            List<String> detachedObsoleteRoles,
+            String previousDefaultVersionId,
+            io.github.hectorvent.floci.services.iam.model.PolicyVersion createdVersionForRollback,
+            List<io.github.hectorvent.floci.services.iam.model.PolicyVersion> prunedVersionsForRollback) {
+        List<String> rollbackRoles = new ArrayList<>(attachedRoleNames);
+        Collections.reverse(rollbackRoles);
+        boolean cleanupSucceeded = true;
+        for (String roleName : rollbackRoles) {
+            String cleanupDescription = "detach policy " + policyArn + " from role " + roleName;
+            if (!CfnRollback.attemptIamCleanup(failure, cleanupDescription,
+                    () -> iamService.detachRolePolicy(roleName, policyArn))) {
+                cleanupSucceeded = false;
+            }
+        }
+        if (createdPolicy
+                && !CfnRollback.attemptIamCleanup(failure, "delete policy " + policyArn,
+                        () -> iamService.deletePolicy(policyArn))) {
+            cleanupSucceeded = false;
+        }
+        // An adopted update that fails here already replaced the default version and/or
+        // detached now-obsolete roles before this attach loop ran; undo both so the failed
+        // update doesn't leave the policy half-migrated under UPDATE_ROLLBACK_COMPLETE.
+        List<String> reattachRoles = new ArrayList<>(detachedObsoleteRoles);
+        Collections.reverse(reattachRoles);
+        for (String roleName : reattachRoles) {
+            String cleanupDescription = "reattach policy " + policyArn + " to role " + roleName;
+            if (!CfnRollback.attemptIamCleanup(failure, cleanupDescription,
+                    () -> iamService.attachRolePolicy(roleName, policyArn))) {
+                cleanupSucceeded = false;
+            }
+        }
+        if (previousDefaultVersionId != null) {
+            String restoredVersionId = previousDefaultVersionId;
+            String restoreDescription =
+                    "restore default policy version " + restoredVersionId + " on " + policyArn;
+            if (!CfnRollback.attemptIamCleanup(failure, restoreDescription,
+                    () -> iamService.setDefaultPolicyVersion(policyArn, restoredVersionId))) {
+                cleanupSucceeded = false;
+            }
+            if (createdVersionForRollback != null) {
+                String strayVersionId = createdVersionForRollback.getVersionId();
+                String pruneDescription = "delete stray policy version " + strayVersionId + " on " + policyArn;
+                if (!CfnRollback.attemptIamCleanup(failure, pruneDescription,
+                        () -> iamService.deletePolicyVersion(policyArn, strayVersionId))) {
                     cleanupSucceeded = false;
                 }
             }
-            if (!CfnRollback.attemptIamCleanup(failure, "delete policy " + policy.getArn(),
-                    () -> iamService.deletePolicy(policy.getArn()))) {
-                cleanupSucceeded = false;
+            // Versions pruned to stay under IAM's 5-version cap before publishing this attempt's
+            // new default are gone for good under their original version id, but the document
+            // itself must not be — restoring only the default and deleting the stray version
+            // (above) frees exactly the slot(s) needed to recreate their content now, so a
+            // "successful" rollback doesn't quietly destroy policy history that predates this
+            // update.
+            for (var prunedVersion : prunedVersionsForRollback) {
+                String document = prunedVersion.getDocument();
+                String restoreContentDescription =
+                        "restore pruned policy version content on " + policyArn;
+                if (!CfnRollback.attemptIamCleanup(failure, restoreContentDescription,
+                        () -> iamService.createPolicyVersion(policyArn, document, false))) {
+                    cleanupSucceeded = false;
+                }
             }
-            if (cleanupSucceeded) {
-                r.getAttributes().remove(CfnRollback.ROLLBACK_OWNED_ATTR);
-            }
-            throw failure;
+        }
+        if (cleanupSucceeded && createdPolicy) {
+            r.getAttributes().remove(CfnRollback.ROLLBACK_OWNED_ATTR);
+        }
+        if (!cleanupSucceeded) {
+            // A compensating call above failed (added as a suppressed exception on `failure`) —
+            // the policy's version/attachments were only partially restored. Surface that so the
+            // stack reports UPDATE_ROLLBACK_FAILED instead of the caller assuming this resource is
+            // fully restored just because UPDATE_ROLLBACK_FAILURE_ATTR was never set.
+            String reason = failure.getMessage() != null
+                    ? failure.getMessage()
+                    : failure.getClass().getSimpleName();
+            r.getAttributes().put(UPDATE_ROLLBACK_FAILURE_ATTR, reason);
         }
     }
 
