@@ -65,6 +65,7 @@ import io.github.hectorvent.floci.services.ec2.model.LaunchTemplate;
 import io.github.hectorvent.floci.services.ec2.model.LaunchTemplateData;
 import io.github.hectorvent.floci.services.ec2.model.ManagedPrefixList;
 import io.github.hectorvent.floci.services.ec2.model.NatGateway;
+import io.github.hectorvent.floci.services.ec2.model.NatGatewayAddress;
 import io.github.hectorvent.floci.services.ec2.model.NetworkAcl;
 import io.github.hectorvent.floci.services.ec2.model.NetworkAclAssociation;
 import io.github.hectorvent.floci.services.ec2.model.NetworkAclEntry;
@@ -5308,7 +5309,15 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
                                        String connectivityType, List<Tag> natGatewayTags) {
         ensureDefaultResources(region);
         Subnet subnet = requireSubnet(region, subnetId);
-        if (allocationId != null && !allocationId.isBlank()) {
+        boolean privateGateway = "private".equalsIgnoreCase(connectivityType);
+        if (privateGateway && isSet(allocationId)) {
+            // A private NAT gateway has no route to the internet and so nothing to attach an
+            // Elastic IP to. Accepting the pair would have the response report a public address
+            // on a gateway that cannot have one.
+            throw new AwsException("InvalidParameterCombination",
+                    "Elastic IP addresses cannot be associated with private NAT gateways.", 400);
+        }
+        if (isSet(allocationId)) {
             getRequiredAddress(region, allocationId);
         }
 
@@ -5320,12 +5329,35 @@ public class Ec2Service implements ContainerTeardown, ResourceProvider {
         natGateway.setConnectivityType(connectivityType != null && !connectivityType.isBlank() ? connectivityType : "public");
         natGateway.setCreateTime(Instant.now());
         natGateway.setRegion(region);
+        natGateway.getNatGatewayAddresses().add(natGatewayAddress(region, subnetId, allocationId));
         if (natGatewayTags != null && !natGatewayTags.isEmpty()) {
             natGateway.setTags(new ArrayList<>(natGatewayTags));
             tags.put(natGateway.getNatGatewayId(), new ArrayList<>(natGatewayTags));
         }
         natGateways.put(key(region, natGateway.getNatGatewayId()), natGateway);
         return natGateway;
+    }
+
+    /**
+     * The address a NAT gateway reports. AWS gives every gateway an interface in its subnet with a
+     * private address, and a public one additionally carries the Elastic IP it was created with,
+     * aws_nat_gateway exposes all three as resource outputs (public_ip, private_ip,
+     * network_interface_id), and Gruntwork's VPC modules re-export nat_gateway_public_ips, so an
+     * address carrying only an allocation id propagates empty values into dependent modules.
+     */
+    private NatGatewayAddress natGatewayAddress(String region, String subnetId, String allocationId) {
+        NatGatewayAddress address = new NatGatewayAddress();
+        address.setNetworkInterfaceId("eni-" + randomHex(17));
+        address.setPrivateIp(assignPrivateIp(region, subnetId));
+        if (isSet(allocationId)) {
+            address.setAllocationId(allocationId);
+            address.setAssociationId("eipassoc-" + randomHex(17));
+            // The allocation was validated above, so this resolves; a private gateway has no EIP
+            // and therefore reports no public address at all, which is what AWS returns for one.
+            addresses.get(key(region, allocationId))
+                    .ifPresent(eip -> address.setPublicIp(eip.getPublicIp()));
+        }
+        return address;
     }
 
     public List<NatGateway> describeNatGateways(String region, List<String> natGatewayIds,
