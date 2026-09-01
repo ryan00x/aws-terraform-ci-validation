@@ -106,6 +106,32 @@ class ElbV2DefaultAttributesIntegrationTest {
                     not(hasItem("idle_timeout.timeout_seconds")));
     }
 
+    /**
+     * Access logs are an Application and Network Load Balancer attribute. A Gateway Load Balancer
+     * has only the two every type shares, and reporting more would hand a client a schema AWS
+     * never returns for it.
+     */
+    @Test
+    void aGatewayLoadBalancerGetsOnlyTheAttributesEveryTypeShares() {
+        String arn = createLoadBalancer("attrs-gwlb", "gateway", "10.100.");
+
+        given()
+            .formParam("Action", "DescribeLoadBalancerAttributes")
+            .formParam("LoadBalancerArn", arn)
+            .header("Authorization", AUTH)
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeLoadBalancerAttributesResponse.DescribeLoadBalancerAttributesResult.Attributes.member.Key",
+                    hasItem("deletion_protection.enabled"))
+            .body("DescribeLoadBalancerAttributesResponse.DescribeLoadBalancerAttributesResult.Attributes.member.find { it.Key == 'load_balancing.cross_zone.enabled' }.Value",
+                    equalTo("false"))
+            .body("DescribeLoadBalancerAttributesResponse.DescribeLoadBalancerAttributesResult.Attributes.member.Key",
+                    not(hasItem("access_logs.s3.enabled")))
+            .body("DescribeLoadBalancerAttributesResponse.DescribeLoadBalancerAttributesResult.Attributes.member.Key",
+                    not(hasItem("idle_timeout.timeout_seconds")));
+    }
+
     @Test
     void aModifiedAttributeWinsOverItsDefaultAndTheRestStillReport() {
         String arn = createLoadBalancer("attrs-modified", "application", "10.99.");

@@ -29,13 +29,20 @@ final class ElbV2DefaultAttributes {
     static Map<String, String> forLoadBalancer(LoadBalancer lb) {
         String type = lb.getType() == null ? "application" : lb.getType().toLowerCase();
         Map<String, String> defaults = new LinkedHashMap<>();
+        // Supported by every type: deletion protection and cross-zone load balancing, and nothing
+        // else. Cross-zone is on for an ALB and off for the others, which is the one default that
+        // differs by type rather than the key simply not existing.
         defaults.put("deletion_protection.enabled", "false");
-        defaults.put("access_logs.s3.enabled", "false");
-        defaults.put("access_logs.s3.bucket", "");
-        defaults.put("access_logs.s3.prefix", "");
-        // Cross-zone load balancing is on for an ALB and off for the others, which is the one
-        // default that differs by type rather than the key simply not existing.
         defaults.put("load_balancing.cross_zone.enabled", "application".equals(type) ? "true" : "false");
+
+        // Access logs are an Application and Network Load Balancer attribute. A Gateway Load
+        // Balancer does not have them, and reporting them for one would hand a client a schema
+        // AWS never returns.
+        if ("application".equals(type) || "network".equals(type)) {
+            defaults.put("access_logs.s3.enabled", "false");
+            defaults.put("access_logs.s3.bucket", "");
+            defaults.put("access_logs.s3.prefix", "");
+        }
 
         if ("application".equals(type)) {
             defaults.put("idle_timeout.timeout_seconds", "60");
