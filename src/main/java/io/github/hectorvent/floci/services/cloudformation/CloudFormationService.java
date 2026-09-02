@@ -68,6 +68,7 @@ public class CloudFormationService implements ResourceProvider {
     private final EmulatorConfig config;
     private final RegionResolver regionResolver;
     private final SamTransformProcessor samTransformProcessor;
+    private final AwsIncludeProcessor awsIncludeProcessor;
     private final Clock clock;
 
     // Persisted state so stacks survive a restart (criteria #10, #11). The in-memory maps above are
@@ -90,6 +91,7 @@ public class CloudFormationService implements ResourceProvider {
         this.config = config;
         this.regionResolver = regionResolver;
         this.samTransformProcessor = new SamTransformProcessor(objectMapper);
+        this.awsIncludeProcessor = new AwsIncludeProcessor(objectMapper, s3Service);
         this.clock = clock;
         this.storageAccount = config.defaultAccountId();
         this.stackBackend = storageFactory.create(
@@ -386,6 +388,9 @@ public class CloudFormationService implements ResourceProvider {
         Stack stack = getStackOrThrow(cs.getStackName(), region);
         try {
             JsonNode newTemplate = parseTemplate(cs.getTemplateBody());
+            // Merge Fn::Transform/AWS::Include snippets before SAM expansion, matching AWS order:
+            // an included fragment may itself carry SAM resources.
+            newTemplate = awsIncludeProcessor.mergeIncludes(newTemplate);
             if (samTransformProcessor.hasSamTransform(newTemplate)) {
                 // The deployed stack's template is always the SAM-expanded form (see
                 // executeTemplate); comparing the change set's raw SAM source against it would
@@ -674,9 +679,50 @@ public class CloudFormationService implements ResourceProvider {
 
     // ── GetTemplate ───────────────────────────────────────────────────────────
 
-    public String getTemplate(String stackName, String region) {
+    private static final String STAGE_PROCESSED = "Processed";
+    private static final String STAGE_ORIGINAL = "Original";
+
+    // AWS's own enum order for the ValidationError message (measured against a real account).
+    private static final List<String> TEMPLATE_STAGE_ENUM = List.of(STAGE_PROCESSED, STAGE_ORIGINAL);
+    // AWS's own StagesAvailable order (Original first), which every GetTemplate call reports.
+    private static final List<String> TEMPLATE_STAGES_AVAILABLE = List.of(STAGE_ORIGINAL, STAGE_PROCESSED);
+
+    public String getTemplate(String stackName, String templateStage, String region) {
+        // AWS validates TemplateStage before it looks the stack up (measured against a real
+        // account: an invalid stage is rejected the same way whether or not the stack exists), so
+        // this must run before getStackOrThrow.
+        String stage = validateTemplateStage(templateStage);
         Stack stack = getStackOrThrow(stackName, region);
-        return stack.getTemplateBody() != null ? stack.getTemplateBody() : "{}";
+        // Processed is the SAM/AWS::Include-expanded form templateBody holds after executeTemplate.
+        // Original (also the default, matching real AWS) is the template exactly as the caller
+        // submitted it. originalTemplateBody is only absent for stacks persisted by a floci version
+        // predating this field, hence the fallback to templateBody; getTemplateSummary reads the
+        // same field for the same reason.
+        String body = STAGE_PROCESSED.equals(stage) ? stack.getTemplateBody() : stack.getOriginalTemplateBody();
+        if (body == null) {
+            body = stack.getTemplateBody();
+        }
+        return body != null ? body : "{}";
+    }
+
+    private String validateTemplateStage(String templateStage) {
+        // null means the caller omitted TemplateStage; "" means the caller sent it present and
+        // empty. AWS rejects the latter (measured against a real account) and only defaults the
+        // former, so this must not treat blank the same as absent.
+        if (templateStage == null) {
+            return STAGE_ORIGINAL;
+        }
+        if (!TEMPLATE_STAGE_ENUM.contains(templateStage)) {
+            throw new AwsException("ValidationError",
+                    "1 validation error detected: Value '" + templateStage + "' at 'templateStage' failed to "
+                            + "satisfy constraint: Member must satisfy enum value set: ["
+                            + String.join(", ", TEMPLATE_STAGE_ENUM) + "]", 400);
+        }
+        return templateStage;
+    }
+
+    public List<String> templateStagesAvailable() {
+        return TEMPLATE_STAGES_AVAILABLE;
     }
 
     // ── GetTemplateSummary ────────────────────────────────────────────────────
@@ -779,6 +825,12 @@ public class CloudFormationService implements ResourceProvider {
                     declaredTransforms.add(t.asText());
                 }
             });
+        }
+        // AWS reports AWS::Include in DeclaredTransforms for the embedded Fn::Transform form too,
+        // even with no top-level Transform section (measured against us-east-1).
+        if (!declaredTransforms.contains(AwsIncludeProcessor.AWS_INCLUDE)
+                && awsIncludeProcessor.containsAwsInclude(template)) {
+            declaredTransforms.add(AwsIncludeProcessor.AWS_INCLUDE);
         }
 
         List<String> iamResourceTypes = resourceTypes.stream()
@@ -931,14 +983,28 @@ public class CloudFormationService implements ResourceProvider {
             JsonNode template = parseTemplate(templateBody);
             stack.setOriginalTemplateBody(templateBody);
 
+            // Merge Fn::Transform/AWS::Include snippets before SAM expansion, matching AWS order:
+            // an included fragment may itself carry SAM resources. mergeIncludes returns the same
+            // reference, unchanged, when the template carries no AWS::Include, which is what lets
+            // the check below tell a real merge apart from a no-op one.
+            JsonNode beforeInclude = template;
+            template = awsIncludeProcessor.mergeIncludes(template);
+            boolean includeMerged = template != beforeInclude;
+
             // Apply SAM transform if the template declares AWS::Serverless-2016-10-31
-            if (samTransformProcessor.hasSamTransform(template)) {
+            boolean hasSamTransform = samTransformProcessor.hasSamTransform(template);
+            if (hasSamTransform) {
                 LOG.infov("Applying SAM transform for stack {0}", stack.getStackName());
                 template = samTransformProcessor.expandSamTemplate(template);
-                // Store the expanded template so GetTemplate returns the transformed version
-                templateBody = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(template);
             }
 
+            // Persist the merged/expanded tree, not the raw submitted body, whenever either
+            // processor actually changed it, so the change-set baseline diffs against it instead of
+            // against a stale Fn::Transform node. A template neither processor touched keeps its
+            // submitted body byte for byte.
+            if (includeMerged || hasSamTransform) {
+                templateBody = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(template);
+            }
             stack.setTemplateBody(templateBody);
 
             // Merge default parameter values from the template with caller-supplied params
@@ -1376,6 +1442,12 @@ public class CloudFormationService implements ResourceProvider {
         stack.getResolvedParameters().putAll(previousState.resolvedParameters());
         if (rollbackFailures.isEmpty()) {
             stack.setTemplateBody(previousState.templateBody());
+            // GetTemplate reads originalTemplateBody for TemplateStage=Original and templateBody
+            // for TemplateStage=Processed: without restoring originalTemplateBody here too, a
+            // rolled-back update would keep serving the failed attempt's submitted body under
+            // Original even though every other piece of state (resources, parameters, outputs)
+            // was restored.
+            stack.setOriginalTemplateBody(previousState.originalTemplateBody());
         }
         try {
             restoreOutputAndExportState(stack, region, previousState);
@@ -1519,6 +1591,7 @@ public class CloudFormationService implements ResourceProvider {
     private StackUpdateSnapshot snapshotForUpdate(Stack stack) {
         return new StackUpdateSnapshot(
                 stack.getTemplateBody(),
+                stack.getOriginalTemplateBody(),
                 new LinkedHashMap<>(stack.getParameters()),
                 new LinkedHashMap<>(stack.getResolvedParameters()),
                 new LinkedHashMap<>(stack.getOutputs()),
@@ -1551,6 +1624,7 @@ public class CloudFormationService implements ResourceProvider {
 
     private record StackUpdateSnapshot(
             String templateBody,
+            String originalTemplateBody,
             Map<String, String> parameters,
             Map<String, String> resolvedParameters,
             Map<String, String> outputs,
@@ -1808,6 +1882,10 @@ public class CloudFormationService implements ResourceProvider {
      * template synchronously ("Template format error: Unresolved resource dependencies [...]")
      * rather than silently skipping the dependent, so mirror that instead of dropping the resource.
      * Malformed or SAM templates are left for the execution path, which surfaces their own errors.
+     * A template carrying an unexpanded {@code Fn::Transform}/{@code AWS::Include} is left for the
+     * same reason: a {@code Conditions} section spliced in from a snippet is invisible here, since
+     * the merge has not run yet, and treating it as absent would fail a template whose dependency
+     * graph the execution path resolves correctly.
      */
     private void validateConditionDependencies(String templateBody, Map<String, String> params,
                                                String region, String accountId) {
@@ -1819,7 +1897,7 @@ public class CloudFormationService implements ResourceProvider {
                     e.getMessage());
             return;
         }
-        if (samTransformProcessor.hasSamTransform(template)) {
+        if (samTransformProcessor.hasSamTransform(template) || awsIncludeProcessor.containsAwsInclude(template)) {
             return;
         }
         JsonNode resources = template.path("Resources");
