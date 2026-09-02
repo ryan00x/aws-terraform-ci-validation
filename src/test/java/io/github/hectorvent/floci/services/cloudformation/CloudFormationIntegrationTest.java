@@ -2461,6 +2461,65 @@ class CloudFormationIntegrationTest {
     }
 
     @Test
+    void createStack_schedulerScheduleGroup_isActuallyProvisioned() {
+        // github.com/floci-io/floci/issues/2396: AWS::Scheduler::ScheduleGroup fell through to the
+        // generic stub, so the stack reported CREATE_COMPLETE with a fake physical id and the group
+        // never actually existed. GetScheduleGroup used to return ResourceNotFoundException here.
+        // ArnParam pins Fn::GetAtt MyGroup.Arn against the group's actual ARN, so an omission or
+        // rename of the provisioner's Arn attribute fails this test rather than only the direct
+        // GetScheduleGroup check below (Greptile review on PR #2796).
+        String template = """
+            {
+              "Resources": {
+                "MyGroup": {
+                  "Type": "AWS::Scheduler::ScheduleGroup",
+                  "Properties": {
+                    "Name": "group-repro"
+                  }
+                },
+                "ArnParam": {
+                  "Type": "AWS::SSM::Parameter",
+                  "Properties": {
+                    "Name": "/app/schedule-group-arn",
+                    "Type": "String",
+                    "Value": {"Fn::GetAtt": ["MyGroup", "Arn"]}
+                  }
+                }
+              }
+            }
+            """;
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateStack")
+            .formParam("StackName", "SchedulerGroupStack")
+            .formParam("TemplateBody", template)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/schedule-groups/group-repro")
+        .then()
+            .statusCode(200)
+            .body(containsString("group-repro"));
+
+        given()
+            .header("X-Amz-Target", "AmazonSSM.GetParameter")
+            .contentType(SSM_CONTENT_TYPE)
+            .body("""
+                {"Name": "/app/schedule-group-arn", "WithDecryption": true}
+                """)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("Parameter.Value", equalTo("arn:aws:scheduler:us-east-1:000000000000:schedule-group/group-repro"));
+    }
+
+    @Test
     void createStack_multipleUnnamedResources_uniqueNames() {
         // Multiple resources of same type without names get unique auto-generated names
         String template = """
