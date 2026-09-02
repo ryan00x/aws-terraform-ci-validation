@@ -265,7 +265,6 @@ public class CloudFormationResourceProvisioner {
             "AWS::RDS::DBProxy",
             "AWS::RDS::DBProxyTargetGroup",
             "AWS::RDS::DBSubnetGroup",
-            "AWS::Route53::HostedZone",
             "AWS::Route53::RecordSet",
             "AWS::SecretsManager::Secret",
             "AWS::SecretsManager::SecretTargetAttachment",
@@ -423,7 +422,6 @@ public class CloudFormationResourceProvisioner {
                 case "AWS::SecretsManager::Secret" -> provisionSecret(resource, properties, engine, region, accountId, stackName);
                 case "AWS::SecretsManager::SecretTargetAttachment" ->
                         provisionSecretTargetAttachment(resource, properties, engine, region, stackName);
-                case "AWS::Route53::HostedZone" -> provisionRoute53HostedZone(resource, properties, engine);
                 case "AWS::Route53::RecordSet" -> provisionRoute53RecordSet(resource, properties, engine);
                 case "AWS::Events::Rule" -> provisionEventBridgeRule(resource, properties, engine, region, stackName);
                 case "AWS::Events::EventBus" -> provisionEventBridgeEventBus(resource, properties, engine, region);
@@ -4765,11 +4763,6 @@ public class CloudFormationResourceProvisioner {
             }
         }
         return out;
-    }
-
-    private void provisionRoute53HostedZone(StackResource r, JsonNode props, CloudFormationTemplateEngine engine) {
-        String zoneId = "Z" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
-        r.setPhysicalId(zoneId);
     }
 
     private void provisionRoute53RecordSet(StackResource r, JsonNode props, CloudFormationTemplateEngine engine) {
