@@ -862,12 +862,6 @@ tiers, is listed in [THANKS.md](https://github.com/floci-io/.github/blob/main/TH
   </a>
 </p>
 
-## Contributors
-
-<a href="https://github.com/floci-io/floci/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=floci-io/floci&max=100&columns=20" />
-</a>
-
 ## License
 
 MIT. Use it however you want.
